@@ -1,65 +1,75 @@
-import yfinance as yf
-import pandas as pd
-import xgboost as xgb
+# 📈 Generative AI Stock Portfolio Analyzer
 
-def get_data(ticker, period="2y"):
-    data = yf.download(ticker, period=period, interval="1d")
-    data.dropna(inplace=True)
-    return data
-def add_features(df):
-    df["return_1d"] = df["Adj Close"].pct_change()
-    df["ma_10"] = df["Adj Close"].rolling(10).mean()
-    df["ma_50"] = df["Adj Close"].rolling(50).mean()
-    df["volatility_10"] = df["return_1d"].rolling(10).std()
-    df.dropna(inplace=True)
-    return df
-def add_labels(df, horizon=5):
-    df["future_return"] = df["Adj Close"].shift(-horizon) / df["Adj Close"] - 1
-    df["target"] = (df["future_return"] > 0).astype(int)  # 1 = buy, 0 = sell/hold
-    df.dropna(inplace=True)
-    return df
-from sklearn.model_selection import train_test_split
-from sklearn.metrics import classification_report
+The Generative AI Stock Portfolio Analyzer is an intelligent platform that analyzes real-time financial data, generates **Buy / Sell / Hold trading signals** using **Machine Learning (XGBoost)**, and explains decisions using **Large Language Models (LLMs)** through natural-language reasoning.
 
-def train_model(df):
-    features = ["return_1d", "ma_10", "ma_50", "volatility_10"]
-    X = df[features]
-    y = df["target"]
+The app helps users understand stock movement patterns and learn **why** a model might recommend buying or selling, making it a powerful tool for both financial insights and practical ML education.
 
-    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, shuffle=False)
+---
 
-    model = xgb.XGBClassifier(
-        n_estimators=200,
-        max_depth=4,
-        learning_rate=0.05,
-        subsample=0.8,
-        colsample_bytree=0.8
-    )
-    model.fit(X_train, y_train)
-    preds = model.predict(X_test)
-    print(classification_report(y_test, preds))
-    return model, features
-    def generate_signals(df, model, features):
-    probs = model.predict_proba(df[features])[:, 1]
-    df["buy_prob"] = probs
-    df["signal"] = df["buy_prob"].apply(lambda p: "BUY" if p > 0.6 else ("SELL" if p < 0.4 else "HOLD"))
-    return df
-from langchain_openai import ChatOpenAI
+## ✨ Features
 
-def explain_signals(ticker, latest_row):
-    llm = ChatOpenAI(model="gpt-4o-mini")
-    prompt = f"""
-    You are a financial assistant. For stock {ticker}, we have:
+| Category | Description |
+|----------|-------------|
+| 🔄 Live Market Data | Downloads real-world stock data using Yahoo Finance API |
+| 🤖 ML-Based Forecasting | Predicts future returns using XGBoost classifier |
+| 📊 Feature Engineering | Moving averages, returns, volatility & price trends |
+| 💹 Actionable Signals | Generates BUY / SELL / HOLD signals automatically |
+| 🧠 LLM Reasoning | Converts raw numbers into human-readable explanations |
+| 🖥 Interactive UI | Streamlit dashboard with charts & probability scoring |
+| 📁 Multi-ticker Mode | Analyze a custom portfolio |
+| 📉 Performance Metrics | Accuracy evaluation & model statistics |
 
-    - Current price: {latest_row['Adj Close']:.2f}
-    - 1-day return: {latest_row['return_1d']:.4f}
-    - MA10: {latest_row['ma_10']:.2f}
-    - MA50: {latest_row['ma_50']:.2f}
-    - Volatility (10d): {latest_row['volatility_10']:.4f}
-    - Model signal: {latest_row['signal']} (buy_prob={latest_row['buy_prob']:.2f})
+---
 
-    Explain in simple terms why the model might be suggesting this action and provide a short, non-financial-advice style explanation.
-    """
+## 🛠️ Tech Stack
 
-    return llm.invoke(prompt).content
+| Component | Technology |
+|-----------|------------|
+| Machine Learning | XGBoost, Scikit-Learn |
+| Data | yfinance (Yahoo Finance) |
+| Backend / Logic | Python, Pandas, NumPy |
+| LLM & Reasoning | LangChain + OpenAI GPT-4 or GPT-4o-mini |
+| UI | Streamlit |
+| Visualization | Matplotlib / Plotly |
+| Deployment (Optional) | Streamlit Cloud / Docker / HuggingFace Spaces |
 
+---
+
+## 🧱 System Architecture
+
+     ┌───────────────────────────┐
+               │     User enters ticker     │
+               └──────────────┬─────────────┘
+                              │
+                              ▼
+                  ┌────────────────────┐
+                  │   get_data() API    │
+                  │  (yfinance loader)  │
+                  └────────────┬────────┘
+                              │
+                              ▼
+                   ┌────────────────────┐
+                   │  Feature Generation │
+                   │ (MA10, MA50, return)│
+                   └────────────┬────────┘
+                              │
+                              ▼
+                ┌────────────────────────────┐
+                │  Train & Predict w/ XGBoost │
+                └──────────────┬──────────────┘
+                               │ prediction probs
+                               ▼
+                       ┌───────────────┐
+                       │ Signal Engine │ BUY/SELL/HOLD
+                       └───────┬───────┘
+                               │
+                               ▼
+                   ┌─────────────────────────┐
+                   │   LLM Explanation Layer  │
+                   │   (LangChain + OpenAI)   │
+                   └────────────┬────────────┘
+                               │
+                               ▼
+                  ┌──────────────────────────────┐
+                  │        Streamlit UI            │
+                  └──────────────────────────────┘
