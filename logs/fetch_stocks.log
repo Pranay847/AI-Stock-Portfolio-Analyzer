@@ -1,0 +1,146 @@
+2025-12-12 19:51:16,333 INFO Downloading AAPL (attempt 1)
+2025-12-12 19:51:17,919 WARNING Error fetching AAPL: Empty dataframe returned
+2025-12-12 19:51:17,919 INFO Retrying AAPL after 2s
+2025-12-12 19:51:19,921 INFO Downloading AAPL (attempt 2)
+2025-12-12 19:51:20,574 WARNING Error fetching AAPL: Empty dataframe returned
+2025-12-12 19:51:20,575 INFO Retrying AAPL after 4s
+2025-12-12 19:51:24,610 INFO Downloading AAPL (attempt 3)
+2025-12-12 19:51:25,227 WARNING Error fetching AAPL: Empty dataframe returned
+2025-12-12 19:51:25,228 ERROR Failed to fetch AAPL after 2 retries
+2025-12-12 19:51:48,408 INFO Downloading FAKE (attempt 1)
+2025-12-12 19:51:48,445 INFO Saved FAKE: 2 rows -> data/raw/FAKE.csv
+2025-12-12 19:54:06,671 INFO Downloading AAPL (attempt 1)
+2025-12-12 19:54:08,692 INFO Empty dataframe for AAPL with actions=True, trying fallback without actions
+2025-12-12 19:54:09,367 INFO Attempting longer period (5y) for AAPL
+2025-12-12 19:54:10,033 WARNING Error fetching AAPL: Empty dataframe returned
+2025-12-12 19:54:10,033 INFO Retrying AAPL after 2s
+2025-12-12 19:54:12,046 INFO Downloading AAPL (attempt 2)
+2025-12-12 19:54:12,011 INFO Empty dataframe for AAPL with actions=True, trying fallback without actions
+2025-12-12 19:54:12,696 INFO Attempting longer period (5y) for AAPL
+2025-12-12 19:54:13,403 WARNING Error fetching AAPL: Empty dataframe returned
+2025-12-12 19:54:13,405 INFO Retrying AAPL after 4s
+2025-12-12 19:54:17,420 INFO Downloading AAPL (attempt 3)
+2025-12-12 19:54:19,645 INFO Empty dataframe for AAPL with actions=True, trying fallback without actions
+2025-12-12 19:54:20,453 INFO Attempting longer period (5y) for AAPL
+2025-12-12 19:54:21,135 WARNING Error fetching AAPL: Empty dataframe returned
+2025-12-12 19:54:21,136 ERROR Failed to fetch AAPL after 2 retries
+2025-12-12 20:06:39,030 INFO Downloading AAPL (attempt 1)
+2025-12-12 20:06:41,154 INFO Empty dataframe for AAPL with actions=True, trying fallback without actions
+2025-12-12 20:06:41,825 INFO Attempting longer period (5y) for AAPL
+2025-12-12 20:06:42,526 WARNING Error fetching AAPL: Empty dataframe returned
+2025-12-12 20:06:42,527 INFO Retrying AAPL after 2s
+2025-12-12 20:06:44,538 INFO Downloading AAPL (attempt 2)
+2025-12-12 20:06:45,254 INFO Empty dataframe for AAPL with actions=True, trying fallback without actions
+2025-12-12 20:06:46,016 INFO Attempting longer period (5y) for AAPL
+2025-12-12 20:06:46,759 WARNING Error fetching AAPL: Empty dataframe returned
+2025-12-12 20:06:46,761 INFO Retrying AAPL after 4s
+2025-12-12 20:06:50,030 INFO Downloading AAPL (attempt 3)
+2025-12-12 20:07:06,428 INFO Empty dataframe for AAPL with actions=True, trying fallback without actions
+2025-12-12 20:07:07,197 INFO Attempting longer period (5y) for AAPL
+2025-12-12 20:07:07,862 WARNING Error fetching AAPL: Empty dataframe returned
+2025-12-12 20:07:07,863 ERROR Failed to fetch AAPL after 2 retries
+2025-12-12 20:07:20,320 INFO Downloading AAPL (attempt 1)
+2025-12-12 20:07:22,165 INFO Empty dataframe for AAPL with actions=True, trying fallback without actions
+2025-12-12 20:07:22,875 INFO Attempting longer period (5y) for AAPL
+2025-12-12 20:07:23,629 WARNING Error fetching AAPL: Empty dataframe returned
+2025-12-12 20:07:23,630 INFO Retrying AAPL after 2s
+2025-12-12 20:07:25,652 INFO Downloading AAPL (attempt 2)
+2025-12-12 20:07:26,454 INFO Empty dataframe for AAPL with actions=True, trying fallback without actions
+2025-12-12 20:07:27,184 INFO Attempting longer period (5y) for AAPL
+2025-12-12 20:07:27,853 WARNING Error fetching AAPL: Empty dataframe returned
+2025-12-12 20:07:27,854 INFO Retrying AAPL after 4s
+2025-12-12 20:07:31,855 INFO Downloading AAPL (attempt 3)
+2025-12-12 20:07:32,564 INFO Empty dataframe for AAPL with actions=True, trying fallback without actions
+2025-12-12 20:07:33,297 INFO Attempting longer period (5y) for AAPL
+2025-12-12 20:07:34,305 WARNING Error fetching AAPL: Empty dataframe returned
+2025-12-12 20:07:34,307 ERROR Failed to fetch AAPL after 2 retries
+2025-12-13 11:47:53,658 INFO Downloading AAPL (attempt 1)
+2025-12-13 11:47:53,658 INFO Downloading MSFT (attempt 1)
+2025-12-13 11:47:53,658 INFO Downloading AMZN (attempt 1)
+2025-12-13 11:47:53,658 INFO Downloading GOOGL (attempt 1)
+2025-12-13 11:47:55,734 INFO Empty dataframe for AAPL with actions=True, trying fallback without actions
+2025-12-13 11:47:55,774 INFO Empty dataframe for AMZN with actions=True, trying fallback without actions
+2025-12-13 11:47:55,776 INFO Empty dataframe for MSFT with actions=True, trying fallback without actions
+2025-12-13 11:47:55,859 INFO Empty dataframe for GOOGL with actions=True, trying fallback without actions
+2025-12-13 11:47:56,574 INFO Attempting longer period (10y) for AMZN
+2025-12-13 11:47:56,601 INFO Attempting longer period (10y) for GOOGL
+2025-12-13 11:47:56,603 INFO Attempting longer period (10y) for AAPL
+2025-12-13 11:47:56,612 INFO Attempting longer period (10y) for MSFT
+2025-12-13 11:47:57,336 WARNING Error fetching AAPL: Empty dataframe returned
+2025-12-13 11:47:57,336 INFO Retrying AAPL after 2s
+2025-12-13 11:47:57,341 WARNING Error fetching AMZN: Empty dataframe returned
+2025-12-13 11:47:57,344 INFO Retrying AMZN after 2s
+2025-12-13 11:47:57,347 WARNING Error fetching GOOGL: Empty dataframe returned
+2025-12-13 11:47:57,349 INFO Retrying GOOGL after 2s
+2025-12-13 11:47:57,349 WARNING Error fetching MSFT: Empty dataframe returned
+2025-12-13 11:47:57,350 INFO Retrying MSFT after 2s
+2025-12-13 11:47:59,358 INFO Downloading GOOGL (attempt 2)
+2025-12-13 11:47:59,366 INFO Downloading MSFT (attempt 2)
+2025-12-13 11:47:59,378 INFO Downloading AAPL (attempt 2)
+2025-12-13 11:47:59,425 INFO Downloading AMZN (attempt 2)
+2025-12-13 11:48:00,180 INFO Empty dataframe for AAPL with actions=True, trying fallback without actions
+2025-12-13 11:48:00,216 INFO Empty dataframe for GOOGL with actions=True, trying fallback without actions
+2025-12-13 11:48:00,219 INFO Empty dataframe for AMZN with actions=True, trying fallback without actions
+2025-12-13 11:48:00,225 INFO Empty dataframe for MSFT with actions=True, trying fallback without actions
+2025-12-13 11:48:00,955 INFO Attempting longer period (10y) for AMZN
+2025-12-13 11:48:00,958 INFO Attempting longer period (10y) for MSFT
+2025-12-13 11:48:00,962 INFO Attempting longer period (10y) for AAPL
+2025-12-13 11:48:00,963 INFO Attempting longer period (10y) for GOOGL
+2025-12-13 11:48:01,770 WARNING Error fetching AAPL: Empty dataframe returned
+2025-12-13 11:48:01,770 INFO Retrying AAPL after 4s
+2025-12-13 11:48:01,785 WARNING Error fetching GOOGL: Empty dataframe returned
+2025-12-13 11:48:01,788 INFO Retrying GOOGL after 4s
+2025-12-13 11:48:01,790 WARNING Error fetching AMZN: Empty dataframe returned
+2025-12-13 11:48:01,794 INFO Retrying AMZN after 4s
+2025-12-13 11:48:01,795 WARNING Error fetching MSFT: Empty dataframe returned
+2025-12-13 11:48:01,795 INFO Retrying MSFT after 4s
+2025-12-13 11:48:05,782 INFO Downloading AAPL (attempt 3)
+2025-12-13 11:48:05,796 INFO Downloading MSFT (attempt 3)
+2025-12-13 11:48:05,801 INFO Downloading AMZN (attempt 3)
+2025-12-13 11:48:05,805 INFO Downloading GOOGL (attempt 3)
+2025-12-13 11:48:06,541 INFO Empty dataframe for GOOGL with actions=True, trying fallback without actions
+2025-12-13 11:48:06,550 INFO Empty dataframe for AAPL with actions=True, trying fallback without actions
+2025-12-13 11:48:06,554 INFO Empty dataframe for AMZN with actions=True, trying fallback without actions
+2025-12-13 11:48:06,561 INFO Empty dataframe for MSFT with actions=True, trying fallback without actions
+2025-12-13 11:48:07,376 INFO Attempting longer period (10y) for AAPL
+2025-12-13 11:48:07,386 INFO Attempting longer period (10y) for GOOGL
+2025-12-13 11:48:07,390 INFO Attempting longer period (10y) for MSFT
+2025-12-13 11:48:07,397 INFO Attempting longer period (10y) for AMZN
+2025-12-13 11:48:08,087 WARNING Error fetching GOOGL: Empty dataframe returned
+2025-12-13 11:48:08,087 ERROR Failed to fetch GOOGL after 2 retries
+2025-12-13 11:48:08,088 INFO Downloading NVDA (attempt 1)
+2025-12-13 11:48:08,115 WARNING Error fetching AAPL: Empty dataframe returned
+2025-12-13 11:48:08,116 ERROR Failed to fetch AAPL after 2 retries
+2025-12-13 11:48:08,116 INFO Downloading TSLA (attempt 1)
+2025-12-13 11:48:08,120 WARNING Error fetching MSFT: Empty dataframe returned
+2025-12-13 11:48:08,123 ERROR Failed to fetch MSFT after 2 retries
+2025-12-13 11:48:09,088 WARNING Error fetching AMZN: Empty dataframe returned
+2025-12-13 11:48:09,089 ERROR Failed to fetch AMZN after 2 retries
+2025-12-13 11:48:09,519 INFO Empty dataframe for TSLA with actions=True, trying fallback without actions
+2025-12-13 11:48:09,521 INFO Empty dataframe for NVDA with actions=True, trying fallback without actions
+2025-12-13 11:48:10,287 INFO Attempting longer period (10y) for NVDA
+2025-12-13 11:48:10,294 INFO Attempting longer period (10y) for TSLA
+2025-12-13 11:48:11,121 WARNING Error fetching TSLA: Empty dataframe returned
+2025-12-13 11:48:11,122 INFO Retrying TSLA after 2s
+2025-12-13 11:48:11,124 WARNING Error fetching NVDA: Empty dataframe returned
+2025-12-13 11:48:11,124 INFO Retrying NVDA after 2s
+2025-12-13 11:48:13,151 INFO Downloading TSLA (attempt 2)
+2025-12-13 11:48:13,185 INFO Downloading NVDA (attempt 2)
+2025-12-13 11:48:13,865 INFO Empty dataframe for TSLA with actions=True, trying fallback without actions
+2025-12-13 11:48:13,867 INFO Empty dataframe for NVDA with actions=True, trying fallback without actions
+2025-12-13 11:48:14,589 INFO Attempting longer period (10y) for TSLA
+2025-12-13 11:48:14,605 INFO Attempting longer period (10y) for NVDA
+2025-12-13 11:48:15,306 WARNING Error fetching NVDA: Empty dataframe returned
+2025-12-13 11:48:15,308 INFO Retrying NVDA after 4s
+2025-12-13 11:48:15,312 WARNING Error fetching TSLA: Empty dataframe returned
+2025-12-13 11:48:15,313 INFO Retrying TSLA after 4s
+2025-12-13 11:48:19,334 INFO Downloading NVDA (attempt 3)
+2025-12-13 11:48:19,389 INFO Downloading TSLA (attempt 3)
+2025-12-13 11:48:20,123 INFO Empty dataframe for NVDA with actions=True, trying fallback without actions
+2025-12-13 11:48:20,132 INFO Empty dataframe for TSLA with actions=True, trying fallback without actions
+2025-12-13 11:48:20,865 INFO Attempting longer period (10y) for TSLA
+2025-12-13 11:48:20,870 INFO Attempting longer period (10y) for NVDA
+2025-12-13 11:48:21,726 WARNING Error fetching NVDA: Empty dataframe returned
+2025-12-13 11:48:21,729 ERROR Failed to fetch NVDA after 2 retries
+2025-12-13 11:48:21,732 WARNING Error fetching TSLA: Empty dataframe returned
+2025-12-13 11:48:21,737 ERROR Failed to fetch TSLA after 2 retries
