@@ -1,59 +1,75 @@
-# Stock Portfolio Analyzer
+# 📈 Generative AI Stock Portfolio Analyzer
 
-Quickstart:
+The Generative AI Stock Portfolio Analyzer is an intelligent platform that analyzes real-time financial data, generates **Buy / Sell / Hold trading signals** using **Machine Learning (XGBoost)**, and explains decisions using **Large Language Models (LLMs)** through natural-language reasoning.
 
-1. Create a virtualenv and install dependencies:
+The app helps users understand stock movement patterns and learn **why** a model might recommend buying or selling, making it a powerful tool for both financial insights and practical ML education.
 
-```bash
-python -m venv venv
-source venv/bin/activate
-pip install -r requirements.txt
-```
+---
 
-2. Add your OpenAI key:
+## ✨ Features
 
-```bash
-cp .env.example .env
-# edit .env and set OPENAI_API_KEY
-```
+| Category | Description |
+|----------|-------------|
+| 🔄 Live Market Data | Downloads real-world stock data using Yahoo Finance API |
+| 🤖 ML-Based Forecasting | Predicts future returns using XGBoost classifier |
+| 📊 Feature Engineering | Moving averages, returns, volatility & price trends |
+| 💹 Actionable Signals | Generates BUY / SELL / HOLD signals automatically |
+| 🧠 LLM Reasoning | Converts raw numbers into human-readable explanations |
+| 🖥 Interactive UI | Streamlit dashboard with charts & probability scoring |
+| 📁 Multi-ticker Mode | Analyze a custom portfolio |
+| 📉 Performance Metrics | Accuracy evaluation & model statistics |
 
-3. Fetch raw data and process:
+---
 
-```bash
-python data/fetch_stocks.py
-python data/process_data.py
-```
+## 🛠️ Tech Stack
 
-4. Train model (unified):
+| Component | Technology |
+|-----------|------------|
+| Machine Learning | XGBoost, Scikit-Learn |
+| Data | yfinance (Yahoo Finance) |
+| Backend / Logic | Python, Pandas, NumPy |
+| LLM & Reasoning | LangChain + OpenAI GPT-4 or GPT-4o-mini |
+| UI | Streamlit |
+| Visualization | Matplotlib / Plotly |
+| Deployment (Optional) | Streamlit Cloud / Docker / HuggingFace Spaces |
 
-```bash
-python models/train_xgboost.py
-```
+---
 
-Or train per-ticker models:
+## 🧱 System Architecture
 
-```bash
-python models/train_xgboost.py --per_ticker
-```
-
-5. Build FAISS index:
-
-```bash
-python rag/build_index.py
-```
-
-6. Run the Streamlit app:
-
-```bash
-streamlit run app.py
-```
-
-Files added/modified:
-- `data/fetch_stocks.py`: saves dividends and metadata
-- `data/process_data.py`: compute indicators and produce `data/processed/` CSVs
-- `models/train_xgboost.py`: per-ticker or unified training, save predictions
-- `models/predict.py`: helper for app predictions
-- `rag/build_index.py`: enrich docs with metadata and news
-- `app.py`: uses prediction helper and RAG utilities
-
-Next suggestions: add scheduled runs (cron), add news scraping integration with a news API, and add backtesting modules.
+     ┌───────────────────────────┐
+               │     User enters ticker     │
+               └──────────────┬─────────────┘
+                              │
+                              ▼
+                  ┌────────────────────┐
+                  │   get_data() API    │
+                  │  (yfinance loader)  │
+                  └────────────┬────────┘
+                              │
+                              ▼
+                   ┌────────────────────┐
+                   │  Feature Generation │
+                   │ (MA10, MA50, return)│
+                   └────────────┬────────┘
+                              │
+                              ▼
+                ┌────────────────────────────┐
+                │  Train & Predict w/ XGBoost │
+                └──────────────┬──────────────┘
+                               │ prediction probs
+                               ▼
+                       ┌───────────────┐
+                       │ Signal Engine │ BUY/SELL/HOLD
+                       └───────┬───────┘
+                               │
+                               ▼
+                   ┌─────────────────────────┐
+                   │   LLM Explanation Layer  │
+                   │   (LangChain + OpenAI)   │
+                   └────────────┬────────────┘
+                               │
+                               ▼
+                  ┌──────────────────────────────┐
+                  │        Streamlit UI            │
+                  └──────────────────────────────┘
