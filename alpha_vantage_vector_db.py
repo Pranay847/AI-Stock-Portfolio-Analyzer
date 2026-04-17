@@ -10,6 +10,17 @@ from dotenv import load_dotenv
 load_dotenv()
 
 
+def clean_symbol(symbol: str) -> str:
+    """Clean and validate stock symbol."""
+    if not symbol:
+        return ""
+    # Strip whitespace and convert to uppercase
+    cleaned = symbol.strip().upper()
+    # Remove any non-alphanumeric characters except hyphen (for symbols like BRK-B)
+    cleaned = ''.join(c for c in cleaned if c.isalnum() or c == '-')
+    return cleaned
+
+
 class AlphaVantageVectorDB:
     """
     Complete pipeline for fetching stock data from Alpha Vantage,
@@ -70,6 +81,11 @@ class AlphaVantageVectorDB:
         Returns:
             Dictionary with quote data or None if failed
         """
+        symbol = clean_symbol(symbol)
+        if not symbol:
+            print(f"❌ Invalid symbol provided")
+            return None
+        
         params = {
             "function": "GLOBAL_QUOTE",
             "symbol": symbol,
@@ -119,6 +135,11 @@ class AlphaVantageVectorDB:
         Returns:
             Dictionary with company data or None if failed
         """
+        symbol = clean_symbol(symbol)
+        if not symbol:
+            print(f"❌ Invalid symbol provided")
+            return None
+        
         params = {
             "function": "OVERVIEW",
             "symbol": symbol,
@@ -175,6 +196,11 @@ class AlphaVantageVectorDB:
         Returns:
             List of news items or None if failed
         """
+        symbol = clean_symbol(symbol)
+        if not symbol:
+            print(f"❌ Invalid symbol provided")
+            return None
+        
         params = {
             "function": "NEWS_SENTIMENT",
             "tickers": symbol,
@@ -503,6 +529,11 @@ Relevance: {news_item['relevance_score']:.2f}
         Returns:
             Dictionary with all fetched data
         """
+        symbol = clean_symbol(symbol)
+        if not symbol:
+            print(f"❌ Invalid symbol provided")
+            return {"symbol": symbol, "success": False, "error": "Invalid symbol"}
+        
         print(f"\n{'='*60}")
         print(f"📊 Processing {symbol}")
         print('='*60)
@@ -628,6 +659,10 @@ Relevance: {news_item['relevance_score']:.2f}
         Returns:
             Combined context string
         """
+        symbol = clean_symbol(symbol)
+        if not symbol:
+            return ""
+        
         context_parts = []
         
         # Get from quotes collection

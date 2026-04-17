@@ -1,5 +1,6 @@
 import os
 import json
+import pandas as pd
 from datetime import datetime
 from typing import Optional
 from dotenv import load_dotenv
@@ -27,6 +28,23 @@ try:
 except Exception:
     VECTOR_DB_AVAILABLE = False
     AlphaVantageVectorDB = None
+
+try:
+    from models.predict import Predictor
+    PREDICTOR_AVAILABLE = True
+except Exception:
+    PREDICTOR_AVAILABLE = False
+    Predictor = None
+
+try:
+    from agents.llm_reasoning import generate_rationale, check_llm_available
+    LLM_REASONING_AVAILABLE = True
+except Exception:
+    LLM_REASONING_AVAILABLE = False
+    generate_rationale = None
+
+# XGBoost label encoding: 0=SELL, 1=HOLD, 2=BUY
+_LABEL_MAP = {0: "SELL", 1: "HOLD", 2: "BUY"}
 
 
 class RobinhoodPortfolioAnalyzer:
@@ -217,6 +235,11 @@ class RobinhoodPortfolioAnalyzer:
         Returns:
             Context string for AI analysis
         """
+        # Clean and validate symbol
+        symbol = symbol.strip().upper() if symbol else ""
+        if not symbol:
+            return ""
+        
         context_parts = []
         
         # Get portfolio position info
@@ -280,13 +303,12 @@ Profit/Loss: ${position['profit_loss']:.2f} ({position['profit_loss_percent']:.2
         
         # Get comprehensive context from vector DB (RAG)
         context = self.get_stock_context(symbol)
-        
-        # If Mistral/Ollama not available, use rule-based analysis
-        if not self.ollama_available:
-            return self._rule_based_analysis(position)
-        
-        # AI-powered analysis with Mistral
-        return self._ai_analysis(position, context)
+
+        # Use AI analysis if either LangChain reasoning or Ollama is available
+        if LLM_REASONING_AVAILABLE or self.ollama_available:
+            return self._ai_analysis(position, context)
+
+        return self._rule_based_analysis(position)
     
     def _rule_based_analysis(self, position: dict) -> dict:
         """
@@ -333,70 +355,93 @@ Profit/Loss: ${position['profit_loss']:.2f} ({position['profit_loss_percent']:.2
             'analysis_type': 'rule_based'
         }
     
-    def _ai_analysis(self, position: dict, context: str) -> dict:
-        """
-        AI-powered stock analysis using Mistral via Ollama.
-        """
-        prompt = f"""You are an expert financial analyst. Analyze this stock position and provide a recommendation.
-
-{context}
-
-Based on the above information, provide:
-1. A recommendation: BUY (add to position), SELL (reduce/close position), or HOLD (maintain current position)
-2. A confidence score from 0-100
-3. A brief 2-3 sentence summary explaining your recommendation
-4. 3 specific bullet-point reasons for your recommendation
-
-Consider:
-- Current profit/loss on the position
-- Price trends and technical indicators (if available)
-- Company fundamentals (if available)
-- News sentiment (if available)
-- Risk management (position sizing, diversification)
-
-Respond in this exact JSON format:
-{{
-    "recommendation": "BUY" or "SELL" or "HOLD",
-    "confidence": 75,
-    "summary": "Your 2-3 sentence summary here",
-    "reasons": ["reason 1", "reason 2", "reason 3"]
-}}
-"""
-        
+    def _get_xgboost_prediction(self, ticker: str):
+        """Load pre-computed processed data and return XGBoost (signal, confidence)."""
+        if not PREDICTOR_AVAILABLE:
+            return None, None
         try:
-            # Use Mistral via Ollama
+            processed_path = os.path.join("data", "processed", f"{ticker}.csv")
+            if not os.path.exists(processed_path):
+                return None, None
+            df = pd.read_csv(processed_path, index_col=0, parse_dates=True)
+            exclude = {'Open', 'High', 'Low', 'Close', 'Adj Close', 'Volume',
+                       'future_close', 'future_return', 'label', 'ticker'}
+            features = [c for c in df.columns
+                        if c not in exclude and df[c].dtype in ('float64', 'int64')]
+            if not features:
+                return None, None
+            X_latest = df[features].tail(1)
+            predictor = Predictor()
+            label, confidence, _ = predictor.predict_for_ticker(ticker, X_latest)
+            signal = _LABEL_MAP.get(int(label), "HOLD")
+            return signal, round(float(confidence) * 100, 1)
+        except Exception as e:
+            print(f"   ⚠️  XGBoost prediction error for {ticker}: {e}")
+            return None, None
+
+    def _ai_analysis(self, position: dict, context: str) -> dict:
+        """AI-powered analysis: XGBoost signal + LangChain LLM reasoning."""
+        ticker = position['symbol']
+
+        portfolio_status = (
+            f"Owned: {'Yes' if position['quantity'] > 0 else 'No'} | "
+            f"Shares: {position['quantity']:.4f} | "
+            f"Avg Buy: ${position['average_buy_price']:.2f} | "
+            f"Current: ${position['current_price']:.2f} | "
+            f"P/L: {position['profit_loss_percent']:.2f}%"
+        )
+        quote_data = (
+            f"Price: ${position['current_price']:.2f} | "
+            f"Equity: ${position['equity']:.2f} | "
+            f"Cost Basis: ${position['cost_basis']:.2f}"
+        )
+
+        xgb_signal, xgb_confidence = self._get_xgboost_prediction(ticker)
+
+        if LLM_REASONING_AVAILABLE:
+            result = generate_rationale(
+                ticker=ticker,
+                portfolio_status=portfolio_status,
+                quote_data=quote_data,
+                xgboost_signal=xgb_signal or "No model prediction available",
+                xgboost_confidence=xgb_confidence or 0,
+                rag_context=context,
+            )
+        else:
+            result = self._ollama_fallback(position, context)
+
+        result['symbol'] = ticker
+        result.setdefault('current_price', position['current_price'])
+        result.setdefault('profit_loss_percent', position['profit_loss_percent'])
+        if xgb_signal:
+            result['xgboost_signal'] = xgb_signal
+            result['xgboost_confidence'] = xgb_confidence
+        return result
+
+    def _ollama_fallback(self, position: dict, context: str) -> dict:
+        """Direct Ollama call used only when langchain LLM reasoning is unavailable."""
+        import re
+        prompt = (
+            f"You are an expert financial analyst.\n\n{context}\n\n"
+            "Respond in JSON: {\"recommendation\": \"BUY|SELL|HOLD\", "
+            "\"confidence\": 75, \"summary\": \"...\", \"reasons\": [], \"risks\": []}"
+        )
+        try:
             response = ollama.chat(
                 model="mistral",
                 messages=[
                     {"role": "system", "content": "You are a financial analyst AI. Always respond with valid JSON only."},
-                    {"role": "user", "content": prompt}
-                ]
+                    {"role": "user", "content": prompt},
+                ],
             )
-            
-            # Parse response
             content = response['message']['content']
-            
-            # Extract JSON from response
-            import re
             json_match = re.search(r'\{.*\}', content, re.DOTALL)
-            if json_match:
-                result = json.loads(json_match.group())
-            else:
-                result = json.loads(content)
-            
-            return {
-                'symbol': position['symbol'],
-                'recommendation': result.get('recommendation', 'HOLD'),
-                'confidence': result.get('confidence', 50),
-                'summary': result.get('summary', 'Analysis complete'),
-                'reasons': result.get('reasons', []),
-                'current_price': position['current_price'],
-                'profit_loss_percent': position['profit_loss_percent'],
-                'analysis_type': 'mistral_ai'
-            }
-            
+            result = json.loads(json_match.group() if json_match else content)
+            result.setdefault('risks', [])
+            result['analysis_type'] = 'mistral_ai'
+            return result
         except Exception as e:
-            print(f"   ⚠️  Mistral AI error: {e}")
+            print(f"   ⚠️  Ollama fallback error: {e}")
             return self._rule_based_analysis(position)
     
     def analyze_portfolio(self, max_stocks: int = None) -> list[dict]:

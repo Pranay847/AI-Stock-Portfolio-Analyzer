@@ -3,6 +3,81 @@ import pandas as pd
 import time
 from datetime import datetime
 
+# Company name to ticker symbol mapping
+COMPANY_TO_TICKER = {
+    # Major Tech Companies
+    'APPLE': 'AAPL', 'MICROSOFT': 'MSFT', 'GOOGLE': 'GOOGL', 'ALPHABET': 'GOOGL',
+    'AMAZON': 'AMZN', 'META': 'META', 'FACEBOOK': 'META', 'TESLA': 'TSLA',
+    'NVIDIA': 'NVDA', 'NETFLIX': 'NFLX', 'ADOBE': 'ADBE', 'SALESFORCE': 'CRM',
+    'ORACLE': 'ORCL', 'INTEL': 'INTC', 'IBM': 'IBM', 'CISCO': 'CSCO',
+    'QUALCOMM': 'QCOM', 'AMD': 'AMD', 'PAYPAL': 'PYPL', 'SQUARE': 'SQ',
+    'BLOCK': 'SQ', 'TWITTER': 'TWTR', 'SNAP': 'SNAP', 'UBER': 'UBER',
+    'LYFT': 'LYFT', 'AIRBNB': 'ABNB', 'SPOTIFY': 'SPOT', 'ZOOM': 'ZM',
+    'SHOPIFY': 'SHOP', 'TWILIO': 'TWLO', 'DATADOG': 'DDOG',
+    
+    # Financial
+    'JPMORGAN': 'JPM', 'JP MORGAN': 'JPM', 'BANK OF AMERICA': 'BAC',
+    'WELLS FARGO': 'WFC', 'CITIGROUP': 'C', 'GOLDMAN SACHS': 'GS',
+    'MORGAN STANLEY': 'MS', 'AMERICAN EXPRESS': 'AXP', 'VISA': 'V',
+    'MASTERCARD': 'MA', 'BERKSHIRE HATHAWAY': 'BRK-B', 'BERKSHIRE': 'BRK-B',
+    
+    # Consumer
+    'WALMART': 'WMT', 'TARGET': 'TGT', 'COSTCO': 'COST', 'HOME DEPOT': 'HD',
+    'LOWES': 'LOW', 'MCDONALDS': 'MCD', 'STARBUCKS': 'SBUX', 'NIKE': 'NKE',
+    'COCA COLA': 'KO', 'PEPSI': 'PEP', 'PEPSICO': 'PEP', 'PROCTER GAMBLE': 'PG',
+    'JOHNSON JOHNSON': 'JNJ', 'PFIZER': 'PFE', 'MERCK': 'MRK',
+    
+    # Auto
+    'GENERAL MOTORS': 'GM', 'FORD': 'F', 'TOYOTA': 'TM', 'HONDA': 'HMC',
+    
+    # Energy
+    'EXXON': 'XOM', 'EXXON MOBIL': 'XOM', 'CHEVRON': 'CVX', 'BP': 'BP',
+    'SHELL': 'SHEL', 'CONOCOPHILLIPS': 'COP',
+    
+    # Airlines
+    'DELTA': 'DAL', 'AMERICAN AIRLINES': 'AAL', 'UNITED': 'UAL', 'SOUTHWEST': 'LUV',
+    
+    # Other
+    'DISNEY': 'DIS', 'COMCAST': 'CMCSA', 'VERIZON': 'VZ', 'ATT': 'T',
+    'AT&T': 'T', 'BOEING': 'BA', 'LOCKHEED MARTIN': 'LMT',
+    'CATERPILLAR': 'CAT', '3M': 'MMM', 'HONEYWELL': 'HON'
+}
+
+def resolve_ticker(input_str: str) -> tuple[str, bool]:
+    """
+    Resolve company name or ticker symbol to ticker symbol.
+    
+    Args:
+        input_str: Company name or ticker symbol
+        
+    Returns:
+        Tuple of (ticker_symbol, is_valid)
+    """
+    if not input_str:
+        return '', False
+    
+    cleaned = input_str.strip().upper()
+    
+    # First check if it's already a valid ticker format (short, alphanumeric)
+    if len(cleaned) <= 5 and cleaned.replace('-', '').isalnum():
+        # Likely already a ticker
+        return cleaned, True
+    
+    # Try to find in company mapping
+    if cleaned in COMPANY_TO_TICKER:
+        return COMPANY_TO_TICKER[cleaned], True
+    
+    # Try partial matches (e.g., "MICROSOFT CORP" -> "MICROSOFT")
+    for company_name, ticker in COMPANY_TO_TICKER.items():
+        if company_name in cleaned or cleaned in company_name:
+            return ticker, True
+    
+    # Return as-is if it might be a ticker we don't have mapped
+    if len(cleaned) <= 5:
+        return cleaned, True
+    
+    return cleaned, False
+
 # Page configuration
 st.set_page_config(
     page_title="AI Stock Analyzer Pro",
@@ -101,6 +176,28 @@ def disconnect_from_robinhood():
 
 def analyze_individual_stock(symbol: str) -> dict:
     """Analyze a single stock using AI."""
+    # Resolve company name or ticker to ticker symbol
+    original_input = symbol
+    symbol, is_valid = resolve_ticker(symbol)
+    
+    if not symbol:
+        return {
+            'symbol': 'INVALID',
+            'current_price': 0,
+            'buy_price': 0,
+            'sell_price': 0,
+            'recommendation': 'HOLD',
+            'confidence': 0,
+            'holding_period': 'N/A',
+            'summary': 'Please enter a stock symbol or company name',
+            'reasons': ['Example: "AAPL" or "Apple", "MSFT" or "Microsoft"'],
+            'analysis_type': 'error',
+            'ai_model': 'Error'
+        }
+    
+    # Show resolved ticker if company name was used
+    # (silently resolve without showing notification)
+    
     analyzer = st.session_state.analyzer or get_analyzer()
     
     if analyzer:
@@ -129,21 +226,93 @@ def analyze_individual_stock(symbol: str) -> dict:
                 'timestamp': datetime.now().isoformat()
             }
             
-            # Get AI analysis
-            analysis = analyzer.analyze_stock(symbol, position)
+            # Get AI analysis — try LangGraph workflow first, fall back to analyzer
+            try:
+                from agents.langgraph_workflow import run_analysis
+                portfolio_status = (
+                    f"Owned: {'Yes' if position['quantity'] > 0 else 'No'} | "
+                    f"Price: ${current_price:.2f} | Change: {change_percent:.2f}%"
+                )
+                analysis = run_analysis(symbol, portfolio_status=portfolio_status)
+                if not analysis.get("recommendation"):
+                    raise ValueError("empty langgraph result")
+            except Exception:
+                analysis = analyzer.analyze_stock(symbol, position)
+
+            # Check if we got real price data
+            if current_price == 0:
+                if not is_valid:
+                    error_msg = f'Could not resolve "{original_input}" to a valid ticker symbol.'
+                    reasons = [
+                        f'Unknown company or ticker: {original_input}',
+                        'Try using the exact ticker symbol (e.g., MSFT, AAPL)',
+                        'Or check the spelling of the company name'
+                    ]
+                else:
+                    error_msg = f'Unable to fetch market data for {symbol}.'
+                    reasons = [
+                        'Real-time data unavailable',
+                        'Possible reasons: API rate limits, invalid ticker, or network issues',
+                        'Alpha Vantage free tier: 25 API calls/day limit'
+                    ]
+                
+                return {
+                    'symbol': symbol,
+                    'current_price': 0,
+                    'buy_price': 0,
+                    'sell_price': 0,
+                    'recommendation': 'HOLD',
+                    'confidence': 0,
+                    'holding_period': 'N/A',
+                    'summary': error_msg,
+                    'reasons': reasons,
+                    'analysis_type': 'error',
+                    'ai_model': 'Data Unavailable',
+                    'data_fetch_failed': True
+                }
             
-            current_price = current_price or 100
+            recommendation = analysis.get('recommendation', 'HOLD')
+            confidence = analysis.get('confidence', 50)
             
+            # Dynamic price targets based on recommendation and confidence
+            if recommendation == 'BUY':
+                # Higher confidence = more aggressive upside target
+                sell_price = current_price * (1 + 0.08 + confidence * 0.0015)
+                # Entry price slightly below current, tighter with higher confidence
+                buy_price = current_price * (1 - 0.03 + confidence * 0.0002)
+            elif recommendation == 'SELL':
+                # Higher confidence = more aggressive downside protection
+                buy_price = current_price * (1 - 0.10 - confidence * 0.001)
+                # Exit target above current, closer with higher confidence
+                sell_price = current_price * (1 + 0.02 - confidence * 0.0001)
+            else:  # HOLD
+                # Moderate targets for range-bound trading
+                buy_price = current_price * (1 - 0.05)
+                sell_price = current_price * (1 + 0.08 + confidence * 0.0005)
+            
+            analysis_type = analysis.get('analysis_type', 'ai')
+            if analysis_type in ('langchain_llm', 'langchain_llm_text', 'langgraph_workflow'):
+                ai_model_label = 'LangChain + Mistral'
+            elif analysis_type == 'mistral_ai':
+                ai_model_label = 'Mistral AI'
+            else:
+                ai_model_label = 'Rule-Based'
+
             return {
                 'symbol': symbol,
                 'current_price': current_price,
-                'buy_price': current_price * 0.95,
-                'sell_price': current_price * 1.15,
-                'recommendation': analysis.get('recommendation', 'HOLD'),
-                'confidence': analysis.get('confidence', 50),
-                'holding_period': 'Short Term (1-3 months)' if analysis.get('recommendation') == 'SELL' else 'Long Term (6+ months)',
+                'buy_price': buy_price,
+                'sell_price': sell_price,
+                'recommendation': recommendation,
+                'confidence': confidence,
+                'holding_period': 'Short Term (1-3 months)' if recommendation == 'SELL' else 'Long Term (6+ months)',
                 'summary': analysis.get('summary', 'Analysis complete.'),
-                'reasons': analysis.get('reasons', [])
+                'reasons': analysis.get('reasons', []),
+                'risks': analysis.get('risks', []),
+                'xgboost_signal': analysis.get('xgboost_signal'),
+                'xgboost_confidence': analysis.get('xgboost_confidence'),
+                'analysis_type': analysis_type,
+                'ai_model': ai_model_label,
             }
         except Exception as e:
             st.warning(f"AI analysis unavailable: {e}")
@@ -152,20 +321,35 @@ def analyze_individual_stock(symbol: str) -> dict:
     import random
     price = random.uniform(50, 500)
     rec = random.choice(['BUY', 'SELL', 'HOLD'])
+    confidence = random.randint(60, 95)
+    
+    # Dynamic price targets based on recommendation and confidence
+    if rec == 'BUY':
+        sell_price = price * (1 + 0.08 + confidence * 0.0015)
+        buy_price = price * (1 - 0.03 + confidence * 0.0002)
+    elif rec == 'SELL':
+        buy_price = price * (1 - 0.10 - confidence * 0.001)
+        sell_price = price * (1 + 0.02 - confidence * 0.0001)
+    else:  # HOLD
+        buy_price = price * (1 - 0.05)
+        sell_price = price * (1 + 0.08 + confidence * 0.0005)
+    
     return {
         'symbol': symbol,
         'current_price': round(price, 2),
-        'buy_price': round(price * 0.95, 2),
-        'sell_price': round(price * 1.15, 2),
+        'buy_price': round(buy_price, 2),
+        'sell_price': round(sell_price, 2),
         'recommendation': rec,
-        'confidence': random.randint(60, 95),
+        'confidence': confidence,
         'holding_period': 'Short Term (1-3 months)' if rec == 'SELL' else 'Long Term (6+ months)',
         'summary': f"Based on current market conditions and technical analysis, {symbol} shows {rec.lower()} signals.",
         'reasons': [
             "Technical indicators suggest momentum",
             "Market sentiment is favorable",
             "Valuation metrics are reasonable"
-        ]
+        ],
+        'analysis_type': 'mock',
+        'ai_model': 'Demo Mode'
     }
 
 
@@ -234,6 +418,11 @@ def analyze_sp500(num_stocks: int = 10, progress_callback=None):
                 if quote:
                     current_price = quote.get('price', 0)
                     change_percent = float(quote.get('change_percent', 0))
+            
+            # Skip if no real data available
+            if current_price == 0:
+                st.warning(f"⚠️ Skipping {symbol} - no data available")
+                continue
             
             # Always use AI analysis
             position = {
@@ -325,9 +514,9 @@ with st.sidebar:
                 
                 col1, col2 = st.columns(2)
                 with col1:
-                    submit = st.form_submit_button("🔓 Login", type="primary", width="stretch")
+                    submit = st.form_submit_button("🔓 Login", type="primary", use_container_width=True)
                 with col2:
-                    cancel = st.form_submit_button("Cancel", width="stretch")
+                    cancel = st.form_submit_button("Cancel", use_container_width=True)
                 
                 if submit:
                     if username and password:
@@ -351,7 +540,7 @@ with st.sidebar:
             st.caption("🔒 Your credentials are never stored")
             st.caption("📱 If 2FA is enabled, enter the code from your authenticator app")
         else:
-            if st.button("🔗 Connect to Robinhood", type="primary", width="stretch"):
+            if st.button("🔗 Connect to Robinhood", type="primary", use_container_width=True):
                 st.session_state.show_login_form = True
                 st.rerun()
     
@@ -410,28 +599,48 @@ tab1, tab2, tab3, tab4 = st.tabs([
 # TAB 1: Individual Stock Analysis
 with tab1:
     st.header("Individual Stock Analysis")
-    st.markdown("Enter a stock symbol to get AI-powered buy/sell recommendations")
+    st.markdown("Enter a stock symbol or company name to get AI-powered buy/sell recommendations")
     
     col1, col2 = st.columns([3, 1])
     
     with col1:
         stock_symbol = st.text_input(
-            "Stock Symbol",
+            "Enter Stock Symbol or Company Name",
             placeholder="e.g., AAPL, TSLA, GOOGL",
-            max_chars=10
+            max_chars=10,
+            help="Enter the ticker symbol (e.g., MSFT for Microsoft, AAPL for Apple)"
         ).upper()
     
     with col2:
         st.write("")  # Spacing
         st.write("")  # Spacing
-        analyze_button = st.button("🔎 Analyze Stock", type="primary", width="stretch")
+        analyze_button = st.button("🔎 Analyze Stock", type="primary", use_container_width=True)
+    
+    # AI availability check (no status banner shown)
     
     if analyze_button and stock_symbol:
         with st.spinner(f"Analyzing {stock_symbol}... 🤖"):
             result = analyze_individual_stock(stock_symbol)
         
+        # Check if data fetch failed
+        if result.get('data_fetch_failed'):
+            st.error(f"⚠️ Unable to fetch data for **{stock_symbol}**")
+            st.warning(result['summary'])
+            with st.expander("📋 Troubleshooting"):
+                for reason in result.get('reasons', []):
+                    st.markdown(f"• {reason}")
+                st.markdown("\n**Tips:**")
+                st.markdown("• Use ticker symbols: **MSFT** not Microsoft, **AAPL** not Apple")
+                st.markdown("• Alpha Vantage free tier has 25 API calls/day")
+                st.markdown("• Wait a few minutes if you've hit the rate limit")
+            st.stop()
+        
         # Display Results
         st.success(f"✅ Analysis Complete for {result['symbol']}")
+        
+        # Show AI model used
+        ai_badge = f"🤖 **{result.get('ai_model', 'Unknown')}**" if result.get('analysis_type') == 'mistral_ai' else f"📊 {result.get('ai_model', 'Rule-Based')}"
+        st.caption(f"Analyzed by: {ai_badge}")
         
         # Recommendation Badge
         rec_color = {
@@ -469,8 +678,11 @@ with tab1:
             st.info(f"📅 Recommended holding period: **{result['holding_period']}**")
         
         with col2:
-            potential_return = ((result['sell_price'] - result['buy_price']) / result['buy_price']) * 100
-            st.metric("Potential Return", f"{potential_return:.1f}%")
+            if result['buy_price'] > 0:
+                potential_return = ((result['sell_price'] - result['buy_price']) / result['buy_price']) * 100
+                st.metric("Potential Return", f"{potential_return:.1f}%")
+            else:
+                st.metric("Potential Return", "N/A")
         
         # Analysis Summary
         st.markdown("### 📝 Analysis Summary")
@@ -487,18 +699,18 @@ with tab1:
         col1, col2, col3 = st.columns(3)
         
         with col1:
-            if st.button(f"✅ Execute BUY Order for {result['symbol']}", width="stretch"):
+            if st.button(f"✅ Execute BUY Order for {result['symbol']}", use_container_width=True):
                 if st.session_state.robinhood_connected:
                     st.success(f"Buy order placed for {result['symbol']} at ${result['buy_price']:.2f}")
                 else:
                     st.warning("Connect to Robinhood to execute trades")
         
         with col2:
-            if st.button(f"📋 Add to Watchlist", width="stretch"):
+            if st.button(f"📋 Add to Watchlist", use_container_width=True):
                 st.info(f"{result['symbol']} added to watchlist")
         
         with col3:
-            if st.button(f"📊 View Detailed Analysis", width="stretch"):
+            if st.button(f"📊 View Detailed Analysis", use_container_width=True):
                 st.info("Opening detailed analysis dashboard...")
 
 # TAB 2: Portfolio Analysis
@@ -511,7 +723,7 @@ with tab2:
         st.info("👈 Click 'Connect to Robinhood' in the sidebar to get started")
         
         # Demo mode option
-        if st.button("🎭 Try Demo Mode", width="content"):
+        if st.button("🎭 Try Demo Mode"):
             # Load mock portfolio for demo
             from robinhood_portfolio_analyzer import demo_with_mock_data
             try:
@@ -547,9 +759,15 @@ with tab2:
         
         with col1:
             st.markdown(f"**{len(st.session_state.portfolio_data)} stocks in portfolio**")
+            # Show AI status
+            analyzer = st.session_state.analyzer
+            if analyzer and analyzer.ollama_available:
+                st.caption("🤖 Mistral AI Ready")
+            else:
+                st.caption("📊 Rule-Based Analysis")
         
         with col2:
-            if st.button("🤖 Analyze with AI", type="primary", width="stretch"):
+            if st.button("🤖 Analyze with AI", type="primary", use_container_width=True):
                 with st.spinner("AI is analyzing your portfolio... 🤖"):
                     df = analyze_portfolio_stocks()
                     if not df.empty:
@@ -621,22 +839,30 @@ with tab2:
                 df_display.columns = ['Symbol', 'Name', 'Shares', 'Price', 'P/L %']
                 df_display['Price'] = df_display['Price'].apply(lambda x: f"${x:.2f}")
                 df_display['P/L %'] = df_display['P/L %'].apply(lambda x: f"{x:.2f}%")
-                st.dataframe(df_display, width="stretch")
+                st.dataframe(df_display, use_container_width=True)
 
 # TAB 3: S&P 500 Analysis
 with tab3:
     st.header("S&P 500 Stock Analysis")
-    st.markdown("Real-time analysis of top S&P 500 stocks with **Mistral AI** recommendations")
+    
+    # Check AI availability
+    analyzer = get_analyzer()
+    if analyzer and analyzer.ollama_available:
+        st.markdown("Real-time analysis of top S&P 500 stocks with **🤖 Mistral AI** recommendations")
+    else:
+        st.markdown("Real-time analysis of top S&P 500 stocks")
+        st.info("💡 Install Ollama + Mistral for AI-powered analysis (see Individual Stock tab for instructions)")
     
     col1, col2 = st.columns([3, 1])
     
     with col1:
         num_stocks = st.slider("Number of stocks to analyze", 5, 20, 10, 
-                               help="⚠️ Alpha Vantage free tier: 25 API calls/day")
+                               help="⚠️ Alpha Vantage free tier: 25 API calls/day. Each stock uses 1 call.")
+        st.caption("💡 Free API tier has daily limits. Start with fewer stocks if you've been testing.")
     
     with col2:
         st.write("")  # Spacing
-        analyze_sp500_btn = st.button("🔄 Run Analysis", type="primary", width="stretch")
+        analyze_sp500_btn = st.button("🔄 Run Analysis", type="primary", use_container_width=True)
     
     if analyze_sp500_btn:
         progress_bar = st.progress(0)
@@ -683,7 +909,7 @@ with tab3:
                 return ['background-color: #fff3cd'] * len(row)
         
         styled_df = df.style.apply(highlight_recommendation, axis=1)
-        st.dataframe(styled_df, width="stretch", height=400)
+        st.dataframe(styled_df, use_container_width=True, height=400)
         
         # Quick Actions
         st.markdown("### ⚡ Quick Actions")
@@ -758,7 +984,7 @@ with tab4:
         'Price': ['$195.50', '$142.30', '$242.80', '$378.90'],
         'Status': ['Executed', 'Executed', 'Pending', 'Monitoring']
     })
-    st.dataframe(recent_trades, width="stretch")
+    st.dataframe(recent_trades, use_container_width=True)
     
     # Performance Chart (placeholder)
     st.subheader("📈 Portfolio Performance")
