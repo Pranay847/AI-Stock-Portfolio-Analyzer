@@ -2,8 +2,10 @@ import os
 import requests
 import chromadb
 from sentence_transformers import SentenceTransformer
-from datetime import datetime
+from datetime import datetime, timedelta
 import json
+import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Optional
 from dotenv import load_dotenv
 
@@ -65,12 +67,27 @@ class AlphaVantageVectorDB:
         
         # Load embedding model (all-MiniLM-L6-v2 is fast and good quality)
         self.embedding_model = SentenceTransformer('all-MiniLM-L6-v2')
-        
+
+        # In-memory TTL cache: {cache_key: (data, expires_at)}
+        self._cache: dict = {}
+        self._cache_ttl_seconds = 300  # 5 minutes
+
         print("✅ Alpha Vantage Vector DB initialized")
         print(f"   📁 Database path: {db_path}")
     
+    # ==================== CACHE HELPERS ====================
+
+    def _cache_get(self, key: str):
+        entry = self._cache.get(key)
+        if entry and datetime.now() < entry[1]:
+            return entry[0]
+        return None
+
+    def _cache_set(self, key: str, value) -> None:
+        self._cache[key] = (value, datetime.now() + timedelta(seconds=self._cache_ttl_seconds))
+
     # ==================== DATA FETCHING ====================
-    
+
     def fetch_quote(self, symbol: str) -> Optional[dict]:
         """
         Fetch real-time quote data for a stock.
@@ -85,18 +102,23 @@ class AlphaVantageVectorDB:
         if not symbol:
             print(f"❌ Invalid symbol provided")
             return None
-        
+
+        cache_key = f"quote_{symbol}"
+        cached = self._cache_get(cache_key)
+        if cached:
+            return cached
+
         params = {
             "function": "GLOBAL_QUOTE",
             "symbol": symbol,
             "apikey": self.api_key
         }
-        
+
         try:
             response = requests.get(self.base_url, params=params)
             response.raise_for_status()
             data = response.json()
-            
+
             if "Global Quote" not in data or not data["Global Quote"]:
                 print(f"❌ No quote data for {symbol}")
                 return None
@@ -119,12 +141,14 @@ class AlphaVantageVectorDB:
             }
             
             print(f"✅ Fetched quote for {symbol}: ${result['price']:.2f}")
+            self._cache_set(cache_key, result)
             return result
-            
+
         except Exception as e:
             print(f"❌ Error fetching quote for {symbol}: {str(e)}")
             return None
-    
+
+
     def fetch_company_overview(self, symbol: str) -> Optional[dict]:
         """
         Fetch company fundamental data (overview).
@@ -139,22 +163,27 @@ class AlphaVantageVectorDB:
         if not symbol:
             print(f"❌ Invalid symbol provided")
             return None
-        
+
+        cache_key = f"overview_{symbol}"
+        cached = self._cache_get(cache_key)
+        if cached:
+            return cached
+
         params = {
             "function": "OVERVIEW",
             "symbol": symbol,
             "apikey": self.api_key
         }
-        
+
         try:
             response = requests.get(self.base_url, params=params)
             response.raise_for_status()
             data = response.json()
-            
+
             if not data or "Symbol" not in data:
                 print(f"❌ No overview data for {symbol}")
                 return None
-            
+
             result = {
                 "symbol": data.get("Symbol", symbol),
                 "name": data.get("Name", ""),
@@ -179,8 +208,9 @@ class AlphaVantageVectorDB:
             }
             
             print(f"✅ Fetched overview for {symbol}: {result['name']}")
+            self._cache_set(cache_key, result)
             return result
-            
+
         except Exception as e:
             print(f"❌ Error fetching overview for {symbol}: {str(e)}")
             return None
@@ -200,19 +230,24 @@ class AlphaVantageVectorDB:
         if not symbol:
             print(f"❌ Invalid symbol provided")
             return None
-        
+
+        cache_key = f"news_{symbol}_{limit}"
+        cached = self._cache_get(cache_key)
+        if cached:
+            return cached
+
         params = {
             "function": "NEWS_SENTIMENT",
             "tickers": symbol,
             "limit": limit,
             "apikey": self.api_key
         }
-        
+
         try:
             response = requests.get(self.base_url, params=params)
             response.raise_for_status()
             data = response.json()
-            
+
             if "feed" not in data:
                 print(f"❌ No news data for {symbol}")
                 return None
@@ -242,8 +277,9 @@ class AlphaVantageVectorDB:
                 })
             
             print(f"✅ Fetched {len(news_items)} news items for {symbol}")
+            self._cache_set(cache_key, news_items)
             return news_items
-            
+
         except Exception as e:
             print(f"❌ Error fetching news for {symbol}: {str(e)}")
             return None
@@ -358,17 +394,12 @@ Relevance: {news_item['relevance_score']:.2f}
     # ==================== EMBEDDING & STORAGE ====================
     
     def create_embedding(self, text: str) -> list[float]:
-        """
-        Convert text to embedding vector.
-        
-        Args:
-            text: Text to embed
-            
-        Returns:
-            Embedding vector as list of floats
-        """
-        embedding = self.embedding_model.encode(text)
-        return embedding.tolist()
+        """Convert a single text to an embedding vector."""
+        return self.embedding_model.encode(text).tolist()
+
+    def create_embeddings_batch(self, texts: list[str]) -> list[list[float]]:
+        """Batch-encode multiple texts in one model forward pass (much faster than one-by-one)."""
+        return [v.tolist() for v in self.embedding_model.encode(texts, batch_size=32, show_progress_bar=False)]
     
     def store_quote(self, quote_data: dict) -> bool:
         """
@@ -431,38 +462,37 @@ Relevance: {news_item['relevance_score']:.2f}
             return False
         
         try:
-            # Create chunks
             chunks = self.create_overview_chunks(overview_data)
-            
-            # Process each chunk
-            for i, chunk in enumerate(chunks):
-                # Create embedding
-                embedding = self.create_embedding(chunk)
-                
-                # Create unique ID
-                chunk_types = ["basic", "valuation", "technical", "financial"]
-                doc_id = f"{overview_data['symbol']}_overview_{chunk_types[i]}"
-                
-                # Store in ChromaDB
-                self.overview_collection.upsert(
-                    ids=[doc_id],
-                    embeddings=[embedding],
-                    documents=[chunk],
-                    metadatas=[{
-                        "symbol": overview_data['symbol'],
-                        "name": overview_data['name'],
-                        "sector": overview_data['sector'],
-                        "industry": overview_data['industry'],
-                        "chunk_type": chunk_types[i],
-                        "timestamp": overview_data['timestamp'],
-                        "type": "overview",
-                        "full_data": json.dumps(overview_data)
-                    }]
-                )
-            
+            chunk_types = ["basic", "valuation", "technical", "financial"]
+
+            # Batch-encode all chunks in a single model forward pass
+            embeddings = self.create_embeddings_batch(chunks)
+
+            ids = [f"{overview_data['symbol']}_overview_{ct}" for ct in chunk_types]
+            metadatas = [
+                {
+                    "symbol": overview_data['symbol'],
+                    "name": overview_data['name'],
+                    "sector": overview_data['sector'],
+                    "industry": overview_data['industry'],
+                    "chunk_type": chunk_types[i],
+                    "timestamp": overview_data['timestamp'],
+                    "type": "overview",
+                    "full_data": json.dumps(overview_data)
+                }
+                for i in range(len(chunks))
+            ]
+
+            self.overview_collection.upsert(
+                ids=ids,
+                embeddings=embeddings,
+                documents=chunks,
+                metadatas=metadatas,
+            )
+
             print(f"   📦 Stored {len(chunks)} overview chunks for {overview_data['symbol']}")
             return True
-            
+
         except Exception as e:
             print(f"❌ Error storing overview: {str(e)}")
             return False
@@ -481,37 +511,37 @@ Relevance: {news_item['relevance_score']:.2f}
             return False
         
         try:
-            for i, item in enumerate(news_items):
-                # Create chunk
-                chunk = self.create_news_chunk(item)
-                
-                # Create embedding
-                embedding = self.create_embedding(chunk)
-                
-                # Create unique ID
-                doc_id = f"{item['symbol']}_news_{item['time_published']}_{i}"
-                
-                # Store in ChromaDB
-                self.news_collection.upsert(
-                    ids=[doc_id],
-                    embeddings=[embedding],
-                    documents=[chunk],
-                    metadatas=[{
-                        "symbol": item['symbol'],
-                        "title": item['title'][:200],
-                        "source": item['source'],
-                        "sentiment": item['overall_sentiment'],
-                        "sentiment_score": item['overall_sentiment_score'],
-                        "time_published": item['time_published'],
-                        "timestamp": item['timestamp'],
-                        "type": "news",
-                        "url": item['url']
-                    }]
-                )
-            
+            chunks = [self.create_news_chunk(item) for item in news_items]
+
+            # Batch-encode all news chunks in one forward pass
+            embeddings = self.create_embeddings_batch(chunks)
+
+            ids = [f"{item['symbol']}_news_{item['time_published']}_{i}" for i, item in enumerate(news_items)]
+            metadatas = [
+                {
+                    "symbol": item['symbol'],
+                    "title": item['title'][:200],
+                    "source": item['source'],
+                    "sentiment": item['overall_sentiment'],
+                    "sentiment_score": item['overall_sentiment_score'],
+                    "time_published": item['time_published'],
+                    "timestamp": item['timestamp'],
+                    "type": "news",
+                    "url": item['url']
+                }
+                for item in news_items
+            ]
+
+            self.news_collection.upsert(
+                ids=ids,
+                embeddings=embeddings,
+                documents=chunks,
+                metadatas=metadatas,
+            )
+
             print(f"   📦 Stored {len(news_items)} news embeddings")
             return True
-            
+
         except Exception as e:
             print(f"❌ Error storing news: {str(e)}")
             return False
@@ -539,31 +569,33 @@ Relevance: {news_item['relevance_score']:.2f}
         print('='*60)
         
         result = {"symbol": symbol, "success": False}
-        
-        # Step 1: Fetch and store quote
-        print("\n1️⃣ Fetching real-time quote...")
-        quote = self.fetch_quote(symbol)
+
+        # Fetch quote and overview concurrently
+        print("\n1️⃣ Fetching real-time quote and company overview concurrently...")
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            future_quote = executor.submit(self.fetch_quote, symbol)
+            future_overview = executor.submit(self.fetch_company_overview, symbol)
+            quote = future_quote.result()
+            overview = future_overview.result()
+
         if quote:
             self.store_quote(quote)
             result["quote"] = quote
-        
-        # Step 2: Fetch and store company overview
-        print("\n2️⃣ Fetching company overview...")
-        overview = self.fetch_company_overview(symbol)
+
         if overview:
             self.store_overview(overview)
             result["overview"] = overview
-        
-        # Step 3: Fetch and store news (optional)
+
+        # News fetched separately (uses a different API quota bucket)
         if include_news:
-            print("\n3️⃣ Fetching news & sentiment...")
+            print("\n2️⃣ Fetching news & sentiment...")
             news = self.fetch_news_sentiment(symbol)
             if news:
                 self.store_news(news)
                 result["news"] = news
-        
+
         result["success"] = quote is not None or overview is not None
-        
+
         print(f"\n✅ Completed processing {symbol}")
         return result
     
@@ -581,21 +613,31 @@ Relevance: {news_item['relevance_score']:.2f}
         Returns:
             List of results
         """
-        results = []
-        
         print(f"\n🚀 Processing {len(symbols)} stocks...")
         print("⚠️  Note: Alpha Vantage free tier = 25 requests/day")
-        
-        for i, symbol in enumerate(symbols, 1):
-            print(f"\n[{i}/{len(symbols)}]")
-            result = self.process_stock(symbol, include_news=include_news)
-            results.append(result)
-        
+
+        # max_workers=3 keeps concurrent API calls low enough to respect rate limits
+        results_map: dict = {}
+        with ThreadPoolExecutor(max_workers=3) as executor:
+            future_to_symbol = {
+                executor.submit(self.process_stock, sym, include_news): sym
+                for sym in symbols
+            }
+            for future in as_completed(future_to_symbol):
+                sym = future_to_symbol[future]
+                try:
+                    results_map[sym] = future.result()
+                except Exception as exc:
+                    results_map[sym] = {"symbol": sym, "success": False, "error": str(exc)}
+
+        # Preserve original order
+        results = [results_map[sym] for sym in symbols]
+
         successful = sum(1 for r in results if r.get("success"))
         print(f"\n{'='*60}")
         print(f"✅ Completed! {successful}/{len(symbols)} stocks processed successfully")
         print('='*60)
-        
+
         return results
     
     # ==================== SEARCH & RETRIEVAL ====================
@@ -625,24 +667,28 @@ Relevance: {news_item['relevance_score']:.2f}
         if collection in ["all", "news"]:
             collections_to_search.append(("news", self.news_collection))
         
-        for coll_name, coll in collections_to_search:
+        def _query_collection(coll_name, coll):
             try:
-                search_results = coll.query(
-                    query_embeddings=[query_embedding],
-                    n_results=n_results
-                )
-                
-                for i in range(len(search_results['ids'][0])):
-                    results.append({
+                sr = coll.query(query_embeddings=[query_embedding], n_results=n_results)
+                return [
+                    {
                         "collection": coll_name,
-                        "id": search_results['ids'][0][i],
-                        "document": search_results['documents'][0][i],
-                        "metadata": search_results['metadatas'][0][i],
-                        "distance": search_results['distances'][0][i],
-                        "similarity": 1 - search_results['distances'][0][i]
-                    })
+                        "id": sr['ids'][0][i],
+                        "document": sr['documents'][0][i],
+                        "metadata": sr['metadatas'][0][i],
+                        "distance": sr['distances'][0][i],
+                        "similarity": 1 - sr['distances'][0][i],
+                    }
+                    for i in range(len(sr['ids'][0]))
+                ]
             except Exception:
-                continue
+                return []
+
+        # Query all target collections concurrently
+        with ThreadPoolExecutor(max_workers=len(collections_to_search)) as executor:
+            futures = {executor.submit(_query_collection, name, coll): name for name, coll in collections_to_search}
+            for future in as_completed(futures):
+                results.extend(future.result())
         
         # Sort by similarity
         results.sort(key=lambda x: x['similarity'], reverse=True)
