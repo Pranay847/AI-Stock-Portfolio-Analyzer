@@ -81,6 +81,31 @@ streamlit run app.py
 
 Set any required API keys in `.env` before running provider-specific data or LLM workflows.
 
+## Performance
+
+The multi-stock retrieval pipeline was optimized with concurrent fetching, batched
+embeddings, and single-batch vector-store writes. The following figures were measured
+on a 10-stock portfolio using the included `benchmark_retrieval.py` script:
+
+| Stage | Before | After | Speedup |
+|-------|--------|-------|---------|
+| Fetch — sequential → concurrent (`ThreadPoolExecutor`) | 3.19 s | 0.71 s | ~4.5x |
+| Embedding — per-item → single batched `encode()` | 374 ms | 196 ms | ~1.9x |
+| Vector-store write — N upserts → 1 batched upsert | 1194 ms | 190 ms | ~6.3x |
+| **End-to-end** (sum of the three stages) | **~4.8 s** | **~1.1 s** | **~4.3x** |
+
+Reproduce on your own hardware:
+
+```bash
+pip install yfinance sentence-transformers chromadb
+python benchmark_retrieval.py
+```
+
+Fetch timing depends on network conditions and Yahoo Finance rate limits, so the
+concurrent-fetch speedup varies between runs; embedding and vector-store figures are
+consistent. Numbers reflect a single machine and are meant as a reproducible baseline,
+not a fixed guarantee.
+
 ## Engineering Highlights
 
 - Built an end-to-end portfolio analysis workflow from data ingestion to model prediction and explanation.
