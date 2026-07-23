@@ -9,6 +9,7 @@ from chromadb.config import Settings
 from sentence_transformers import SentenceTransformer
 from datetime import datetime
 import json
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 class StockVectorDB:
     def __init__(self, db_path="./stock_db"):
@@ -123,14 +124,64 @@ class StockVectorDB:
         return stock_data
     
     def process_multiple_stocks(self, symbols):
-        """Process multiple stocks"""
-        results = []
-        for i, symbol in enumerate(symbols, 1):
-            print(f"\n[{i}/{len(symbols)}]")
-            result = self.process_stock(symbol)
-            results.append(result)
-        
-        print(f"\n✅ Completed! Processed {len(symbols)} stocks")
+        """Fetch multiple stocks concurrently, then batch-encode and store."""
+        print(f"\n🚀 Fetching {len(symbols)} stocks concurrently...")
+
+        # Step 1: fetch all stock data in parallel (I/O-bound)
+        stock_data_map: dict = {}
+        with ThreadPoolExecutor(max_workers=min(10, len(symbols))) as executor:
+            future_to_sym = {executor.submit(self.fetch_stock_data, sym): sym for sym in symbols}
+            for future in as_completed(future_to_sym):
+                sym = future_to_sym[future]
+                try:
+                    stock_data_map[sym] = future.result()
+                except Exception as exc:
+                    print(f"❌ Error fetching {sym}: {exc}")
+                    stock_data_map[sym] = None
+
+        # Step 2: build text corpus for all valid stocks
+        valid = [(sym, stock_data_map[sym]) for sym in symbols if stock_data_map.get(sym)]
+        if not valid:
+            print("✅ Completed! Processed 0 stocks")
+            return [None] * len(symbols)
+
+        texts = []
+        for _, data in valid:
+            text = f"""
+            {data['name']} ({data['symbol']})
+            Sector: {data['sector']}
+            Industry: {data['industry']}
+            Price: ${data['price']}
+            Market Cap: ${data['market_cap']}
+            P/E Ratio: {data['pe_ratio']}
+            Description: {data['description'][:300]}
+            """
+            texts.append(text)
+
+        # Step 3: batch-encode all texts in one forward pass
+        print(f"   Batch-encoding {len(texts)} stocks...")
+        embeddings = [v.tolist() for v in self.model.encode(texts, batch_size=32, show_progress_bar=False)]
+
+        # Step 4: upsert everything in one ChromaDB call
+        ids = [data['symbol'] for _, data in valid]
+        metadatas = [
+            {
+                'symbol': data['symbol'],
+                'name': data['name'],
+                'price': data['price'],
+                'sector': data['sector'],
+                'industry': data['industry'],
+                'market_cap': data['market_cap'],
+                'pe_ratio': data['pe_ratio'],
+                'timestamp': data['timestamp'],
+                'full_data': json.dumps(data),
+            }
+            for _, data in valid
+        ]
+        self.collection.upsert(ids=ids, embeddings=embeddings, documents=texts, metadatas=metadatas)
+
+        results = [stock_data_map[sym] for sym in symbols]
+        print(f"\n✅ Completed! Processed {len(valid)}/{len(symbols)} stocks")
         return results
     
     def search_stocks(self, query, n_results=5):
