@@ -37,11 +37,18 @@ except Exception:
     Predictor = None
 
 try:
-    from agents.llm_reasoning import generate_rationale, check_llm_available
+    from agents.llm_reasoning import (
+        generate_rationale,
+        check_llm_available,
+        hosted_llm_configured,
+        resolve_provider,
+    )
     LLM_REASONING_AVAILABLE = True
 except Exception:
     LLM_REASONING_AVAILABLE = False
     generate_rationale = None
+    hosted_llm_configured = lambda: False
+    resolve_provider = lambda provider=None: "ollama"
 
 # XGBoost label encoding: 0=SELL, 1=HOLD, 2=BUY
 _LABEL_MAP = {0: "SELL", 1: "HOLD", 2: "BUY"}
@@ -65,7 +72,16 @@ class RobinhoodPortfolioAnalyzer:
         if use_ollama and OLLAMA_AVAILABLE:
             try:
                 models = ollama.list()
-                model_names = [m.get('name', '') for m in models.get('models', [])]
+                # ollama >= 0.4 returns pydantic objects whose field is `model`;
+                # older releases returned dicts keyed `name`. Support both, or
+                # mistral goes undetected even when it is installed.
+                raw = models.get('models', []) if hasattr(models, 'get') else models.models
+                model_names = []
+                for m in raw:
+                    name = getattr(m, 'model', None)
+                    if name is None and hasattr(m, 'get'):
+                        name = m.get('model') or m.get('name') or ''
+                    model_names.append(name or '')
                 if any('mistral' in name.lower() for name in model_names):
                     self.ollama_available = True
                     print("✅ Mistral AI ready (via Ollama)")
@@ -73,7 +89,14 @@ class RobinhoodPortfolioAnalyzer:
                     print("⚠️  Mistral not found. Run: ollama pull mistral")
             except Exception as e:
                 print(f"⚠️  Ollama not running: {e}")
-        
+
+        # A hosted provider (MISTRAL_API_KEY / OPENAI_API_KEY) needs no local
+        # server, so AI analysis can be available even when Ollama is not --
+        # which is exactly the case on Streamlit Cloud.
+        self.hosted_llm_available = LLM_REASONING_AVAILABLE and hosted_llm_configured()
+        if self.hosted_llm_available:
+            print(f"✅ Hosted LLM ready (provider: {resolve_provider()})")
+
         # Initialize vector database for RAG
         self.vector_db = None
         if VECTOR_DB_AVAILABLE:
@@ -83,7 +106,21 @@ class RobinhoodPortfolioAnalyzer:
                 print(f"⚠️  Vector DB init warning: {e}")
         
         print("✅ Robinhood Portfolio Analyzer initialized")
-    
+
+    @property
+    def ai_available(self) -> bool:
+        """Whether real LLM analysis can run, via local Ollama or a hosted API."""
+        return bool(self.ollama_available or self.hosted_llm_available)
+
+    @property
+    def ai_backend(self) -> str:
+        """Human-readable name of the active AI backend."""
+        if self.hosted_llm_available:
+            return f"{resolve_provider().title()} API"
+        if self.ollama_available:
+            return "Mistral (local Ollama)"
+        return "Rule-Based"
+
     # ==================== ROBINHOOD CONNECTION ====================
     
     def login(self, username: str = None, password: str = None, mfa_code: str = None) -> bool:
@@ -409,6 +446,12 @@ Profit/Loss: ${position['profit_loss']:.2f} ({position['profit_loss_percent']:.2
             )
         else:
             result = self._ollama_fallback(position, context)
+
+        # A failed LLM call still returns a well-formed dict tagged llm_error.
+        # Fall back to the deterministic rules rather than presenting the error
+        # string to the user as a real recommendation.
+        if result.get('analysis_type') == 'llm_error':
+            result = self._rule_based_analysis(position)
 
         result['symbol'] = ticker
         result.setdefault('current_price', position['current_price'])

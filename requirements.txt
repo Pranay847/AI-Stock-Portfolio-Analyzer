@@ -1,31 +1,27 @@
-# Install CPU-only PyTorch. The default linux wheel pulls ~17 NVIDIA CUDA
-# packages (multi-GB), which exceeds hosted build limits on Streamlit Cloud.
+# sentence-transformers pulls in torch, and the default linux wheel drags in the
+# whole nvidia-* CUDA stack (multi-GB), which exceeds hosted build limits on
+# Streamlit Cloud. The CPU wheel is all this app needs -- embeddings run on CPU.
 --extra-index-url https://download.pytorch.org/whl/cpu
+torch>=2.0.0
 
 langchain>=1.0.0
 langchain-community>=0.4.0
 langchain-core>=1.0.0
 langchain-ollama>=1.0.0
+langchain-mistralai>=1.0.0
 langgraph>=1.2.0
 mcp>=1.0.0
 faiss-cpu>=1.12.0
 xgboost>=2.0.3
 pandas>=2.3.0
 numpy>=2.3.0
-yfinance==0.2.33
+yfinance>=0.2.33
 streamlit>=1.40.0
 python-dotenv==1.0.0
 scikit-learn>=1.7.0
 plotly>=5.18.0
 sentence-transformers>=3.0.0
 ollama>=0.4.4,<1.0.0
-
-
-
-
-
-
-
 
 # Added for OpenAI embeddings, model access and utilities
 openai>=0.27.0
@@ -36,9 +32,6 @@ tqdm>=4.66.1
 requests>=2.31.0
 chromadb>=0.4.22
 robin-stocks>=3.0.0
-
-
-
 
 # Secure brokerage account connection (OAuth via SnapTrade)
 snaptrade-python-sdk>=13.0.0

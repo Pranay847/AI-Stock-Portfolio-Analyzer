@@ -115,7 +115,7 @@ class AlphaVantageVectorDB:
         }
 
         try:
-            response = requests.get(self.base_url, params=params)
+            response = requests.get(self.base_url, params=params, timeout=15)
             response.raise_for_status()
             data = response.json()
 
@@ -176,7 +176,7 @@ class AlphaVantageVectorDB:
         }
 
         try:
-            response = requests.get(self.base_url, params=params)
+            response = requests.get(self.base_url, params=params, timeout=15)
             response.raise_for_status()
             data = response.json()
 
@@ -244,7 +244,7 @@ class AlphaVantageVectorDB:
         }
 
         try:
-            response = requests.get(self.base_url, params=params)
+            response = requests.get(self.base_url, params=params, timeout=15)
             response.raise_for_status()
             data = response.json()
 

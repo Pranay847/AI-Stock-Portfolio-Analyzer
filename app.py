@@ -13,6 +13,7 @@ try:
 except ImportError:
     pass
 
+
 def get_config(name: str, default: str = None):
     """Read config from Streamlit secrets first, then the environment.
 
@@ -25,6 +26,19 @@ def get_config(name: str, default: str = None):
     except Exception:
         pass
     return os.getenv(name, default)
+
+
+# Mirror provider keys into the environment. Streamlit does promote top-level
+# secrets to os.environ itself, but the analyzer modules read their keys through
+# a bare os.getenv at import/init time, and a missing ALPHA_VANTAGE_API_KEY
+# there fails silently -- the vector DB is left as None and every quote lookup
+# reports "no market data". Setting them explicitly keeps that off Streamlit
+# internals and covers plain .env runs identically.
+for _key in ("ALPHA_VANTAGE_API_KEY", "ALPHAVANTAGE_API_KEY",
+             "MISTRAL_API_KEY", "OPENAI_API_KEY"):
+    _val = get_config(_key)
+    if _val and not os.getenv(_key):
+        os.environ[_key] = _val
 
 
 # Demo mode hides the brokerage login and uses mock data instead. It defaults to
@@ -86,16 +100,17 @@ def resolve_ticker(input_str: str) -> tuple[str, bool]:
         return '', False
     
     cleaned = input_str.strip().upper()
-    
-    # First check if it's already a valid ticker format (short, alphanumeric)
-    if len(cleaned) <= 5 and cleaned.replace('-', '').isalnum():
-        # Likely already a ticker
-        return cleaned, True
-    
-    # Try to find in company mapping
+
+    # Check the company mapping before the ticker-shape heuristic. Short company
+    # names (APPLE, TESLA, VISA, FORD...) look like tickers, so testing shape
+    # first would pass them through unmapped and fail the quote lookup.
     if cleaned in COMPANY_TO_TICKER:
         return COMPANY_TO_TICKER[cleaned], True
-    
+
+    # Already a valid ticker format (short, alphanumeric)
+    if len(cleaned) <= 5 and cleaned.replace('-', '').isalnum():
+        return cleaned, True
+
     # Try partial matches (e.g., "MICROSOFT CORP" -> "MICROSOFT")
     for company_name, ticker in COMPANY_TO_TICKER.items():
         if company_name in cleaned or cleaned in company_name:
@@ -432,8 +447,11 @@ def analyze_individual_stock(symbol: str) -> dict:
                     f"Price: ${current_price:.2f} | Change: {change_percent:.2f}%"
                 )
                 analysis = run_analysis(symbol, portfolio_status=portfolio_status)
-                if not analysis.get("recommendation"):
-                    raise ValueError("empty langgraph result")
+                # An unreachable LLM still returns a well-formed dict tagged
+                # llm_error. Treat that as a failure so we fall back to the
+                # analyzer instead of surfacing a fabricated HOLD.
+                if not analysis.get("recommendation") or analysis.get("analysis_type") == "llm_error":
+                    raise ValueError("langgraph produced no usable result")
             except Exception:
                 analysis = analyzer.analyze_stock(symbol, position)
 
@@ -598,8 +616,12 @@ def analyze_sp500(num_stocks: int = 10, progress_callback=None):
     # Get analyzer with AI
     analyzer = get_analyzer()
     
-    if not analyzer or not analyzer.ollama_available:
-        st.error("⚠️ Mistral AI not available. Please ensure Ollama is running with Mistral model.")
+    if not analyzer or not analyzer.ai_available:
+        st.error(
+            "⚠️ AI analysis not available. Either run Ollama locally with the "
+            "Mistral model, or set MISTRAL_API_KEY (or OPENAI_API_KEY) to use a "
+            "hosted provider."
+        )
         return pd.DataFrame()
     
     for i, symbol in enumerate(stocks_to_analyze):
@@ -835,7 +857,7 @@ with tab1:
         stock_symbol = st.text_input(
             "Enter Stock Symbol or Company Name",
             placeholder="e.g., AAPL, TSLA, GOOGL",
-            max_chars=10,
+            max_chars=25,
             help="Enter the ticker symbol (e.g., MSFT for Microsoft, AAPL for Apple)"
         ).upper()
     
@@ -910,7 +932,7 @@ with tab1:
             st.metric("Confidence Score", f"{result['confidence']}%")
         
         # Recommendation
-        st.markdown(f"### Recommendation: :{rec_color[result['recommendation']]}[**{result['recommendation']}**]")
+        st.markdown(f"### Recommendation: :{rec_color.get(result['recommendation'], 'gray')}[**{result['recommendation']}**]")
         
         # Holding Period
         col1, col2 = st.columns(2)
@@ -1000,8 +1022,8 @@ with tab2:
             st.markdown(f"**{len(st.session_state.portfolio_data)} stocks in portfolio**")
             # Show AI status
             analyzer = st.session_state.analyzer
-            if analyzer and analyzer.ollama_available:
-                st.caption("🤖 Mistral AI Ready")
+            if analyzer and analyzer.ai_available:
+                st.caption(f"🤖 AI Ready — {analyzer.ai_backend}")
             else:
                 st.caption("📊 Rule-Based Analysis")
         
@@ -1086,11 +1108,11 @@ with tab3:
     
     # Check AI availability
     analyzer = get_analyzer()
-    if analyzer and analyzer.ollama_available:
-        st.markdown("Real-time analysis of top S&P 500 stocks with **🤖 Mistral AI** recommendations")
+    if analyzer and analyzer.ai_available:
+        st.markdown(f"Real-time analysis of top S&P 500 stocks with **🤖 {analyzer.ai_backend}** recommendations")
     else:
         st.markdown("Real-time analysis of top S&P 500 stocks")
-        st.info("💡 Install Ollama + Mistral for AI-powered analysis (see Individual Stock tab for instructions)")
+        st.info("💡 Set MISTRAL_API_KEY for hosted AI analysis, or run Ollama locally with the Mistral model.")
     
     col1, col2 = st.columns([3, 1])
     
