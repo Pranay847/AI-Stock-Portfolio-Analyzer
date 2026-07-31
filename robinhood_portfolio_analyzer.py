@@ -1,6 +1,8 @@
 import os
 import json
 import pandas as pd
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import TimeoutError as FuturesTimeoutError
 from datetime import datetime
 from typing import Optional
 from dotenv import load_dotenv
@@ -66,6 +68,9 @@ class RobinhoodPortfolioAnalyzer:
         self.is_logged_in = False
         self.portfolio = []
         self.use_ollama = use_ollama
+        # Populated by analyze_portfolio with anything the caller should show
+        # the user (failures, deadline cutoffs).
+        self.last_analysis_notes = []
         
         # Initialize Mistral AI via Ollama
         self.ollama_available = False
@@ -496,39 +501,97 @@ Profit/Loss: ${position['profit_loss']:.2f} ({position['profit_loss_percent']:.2
             print(f"   ⚠️  Ollama fallback error: {e}")
             return self._rule_based_analysis(position)
     
-    def analyze_portfolio(self, max_stocks: int = None) -> list[dict]:
+    def analyze_portfolio(self, max_stocks: int = None, max_workers: int = 3,
+                          deadline_seconds: int = 240,
+                          progress_callback=None,
+                          fetch_missing_context: bool = True) -> list[dict]:
         """
         Analyze all stocks in portfolio.
-        
+
+        Positions are analyzed concurrently: each one costs a full LLM round
+        trip, so a sizeable portfolio run sequentially would keep the caller
+        waiting for minutes. A wall-clock deadline bounds the whole run, and
+        anything still unfinished is reported via `last_analysis_notes` rather
+        than blocking indefinitely.
+
         Args:
             max_stocks: Maximum number of stocks to analyze (for API limits)
-            
+            max_workers: Concurrent analyses in flight. Kept modest because
+                each one may write freshly indexed context to ChromaDB.
+            deadline_seconds: Give up on stragglers after this long
+            progress_callback: Called as (completed, total, symbol) on the
+                calling thread, so it is safe to drive UI widgets from it.
+            fetch_missing_context: Passed to analyze_stock. True keeps the RAG
+                backfill (better analysis, extra API call per symbol).
+
         Returns:
-            List of analysis results
+            List of analysis results, in portfolio order. Positions that did
+            not finish before the deadline are omitted; see
+            `last_analysis_notes` for what was dropped.
         """
+        self.last_analysis_notes = []
+
         if not self.portfolio:
             print("❌ No portfolio data. Call fetch_portfolio() first.")
             return []
-        
+
         stocks_to_analyze = self.portfolio[:max_stocks] if max_stocks else self.portfolio
-        
+        total = len(stocks_to_analyze)
+
         print(f"\n{'='*60}")
-        print(f"🤖 ANALYZING {len(stocks_to_analyze)} STOCKS")
+        print(f"🤖 ANALYZING {total} STOCKS")
         print('='*60)
-        
-        results = []
-        for i, position in enumerate(stocks_to_analyze, 1):
-            symbol = position['symbol']
-            print(f"\n[{i}/{len(stocks_to_analyze)}] Analyzing {symbol}...")
-            
-            result = self.analyze_stock(symbol, position)
-            results.append(result)
-            
-            # Print quick summary
-            rec = result['recommendation']
-            emoji = {'BUY': '🟢', 'SELL': '🔴', 'HOLD': '🟡'}.get(rec, '⚪')
-            print(f"   {emoji} {rec} (confidence: {result['confidence']}%)")
-        
+
+        results_by_symbol = {}
+        completed = 0
+
+        executor = ThreadPoolExecutor(max_workers=max_workers)
+        try:
+            futures = {
+                executor.submit(self.analyze_stock, p['symbol'], p,
+                                fetch_missing_context): p['symbol']
+                for p in stocks_to_analyze
+            }
+            try:
+                for future in as_completed(futures, timeout=deadline_seconds):
+                    symbol = futures[future]
+                    completed += 1
+                    try:
+                        result = future.result()
+                    except Exception as e:
+                        note = f"⚠️  {symbol} failed: {e}"
+                        print(f"   {note}")
+                        self.last_analysis_notes.append(note)
+                        continue
+
+                    results_by_symbol[symbol] = result
+                    # Printed here, on the main thread, so concurrent analyses
+                    # do not interleave their output.
+                    rec = result['recommendation']
+                    emoji = {'BUY': '🟢', 'SELL': '🔴', 'HOLD': '🟡'}.get(rec, '⚪')
+                    print(f"[{completed}/{total}] {symbol}: "
+                          f"{emoji} {rec} (confidence: {result['confidence']}%)")
+
+                    if progress_callback:
+                        progress_callback(completed, total, symbol)
+            except FuturesTimeoutError:
+                unfinished = [s for f, s in futures.items() if not f.done()]
+                for f in futures:
+                    f.cancel()
+                note = (f"⏱️  Stopped after {deadline_seconds}s with "
+                        f"{len(unfinished)} position(s) unfinished "
+                        f"({', '.join(unfinished[:5])}"
+                        f"{'...' if len(unfinished) > 5 else ''}). "
+                        f"Showing partial results.")
+                print(f"   {note}")
+                self.last_analysis_notes.append(note)
+        finally:
+            executor.shutdown(wait=False, cancel_futures=True)
+
+        # Return in portfolio order, not completion order.
+        results = [results_by_symbol[p['symbol']] for p in stocks_to_analyze
+                   if p['symbol'] in results_by_symbol]
+
         # Summary
         print(f"\n{'='*60}")
         print("📊 ANALYSIS SUMMARY")

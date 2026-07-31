@@ -127,6 +127,8 @@ if 'portfolio_data' not in st.session_state:
     st.session_state.portfolio_data = []
 if 'portfolio_analysis' not in st.session_state:
     st.session_state.portfolio_analysis = []
+if 'portfolio_notes' not in st.session_state:
+    st.session_state.portfolio_notes = []
 if 'sp500_data' not in st.session_state:
     st.session_state.sp500_data = []
 if 'sp500_notes' not in st.session_state:
@@ -374,17 +376,20 @@ def analyze_individual_stock(symbol: str) -> dict:
     }
 
 
-def analyze_portfolio_stocks() -> pd.DataFrame:
+def analyze_portfolio_stocks(progress_callback=None) -> pd.DataFrame:
     """Analyze all stocks in the Robinhood portfolio."""
     if not st.session_state.portfolio_data:
         return pd.DataFrame()
-    
+
     analyzer = st.session_state.analyzer
     if analyzer:
-        # Run AI analysis on portfolio
-        results = analyzer.analyze_portfolio()
+        # Run AI analysis on portfolio (positions analyzed concurrently)
+        results = analyzer.analyze_portfolio(progress_callback=progress_callback)
         st.session_state.portfolio_analysis = results
-        
+        st.session_state.portfolio_notes = list(
+            getattr(analyzer, 'last_analysis_notes', []) or []
+        )
+
         # Convert to DataFrame
         data = []
         for r in results:
@@ -836,11 +841,24 @@ with tab2:
         
         with col2:
             if st.button("🤖 Analyze with AI", type="primary", use_container_width=True):
+                progress_bar = st.progress(0)
+                status_text = st.empty()
+
+                def update_portfolio_progress(current, total, symbol):
+                    progress_bar.progress(current / total)
+                    status_text.text(f"🤖 Analyzed {symbol}... ({current}/{total})")
+
                 with st.spinner("AI is analyzing your portfolio... 🤖"):
-                    df = analyze_portfolio_stocks()
+                    df = analyze_portfolio_stocks(update_portfolio_progress)
                     if not df.empty:
                         st.session_state.portfolio_data_df = df
-        
+
+                progress_bar.empty()
+                status_text.empty()
+
+        for note in st.session_state.portfolio_notes:
+            st.warning(note)
+
         # Show analysis results
         if st.session_state.portfolio_analysis:
             results = st.session_state.portfolio_analysis
