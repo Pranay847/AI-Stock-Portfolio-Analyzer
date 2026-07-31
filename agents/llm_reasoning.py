@@ -7,36 +7,76 @@ but can be swapped to ChatOpenAI trivially.
 """
 
 import json
+import os
 import re
 from typing import Optional
 
 from agents.prompts import ANALYSIS_SYSTEM_PROMPT, ANALYSIS_USER_PROMPT
 
 
+# Each provider needs its own default model name, since callers pass a single
+# `model` argument (or none at all).
+_DEFAULT_MODELS = {
+    "ollama": "mistral",
+    "mistral": "mistral-small-latest",
+    "openai": "gpt-4o-mini",
+}
+
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _get_llm(provider: str = "ollama", model: str = "mistral", temperature: float = 0.2):
+def hosted_llm_configured() -> bool:
+    """True when an API-key-based provider is available (needs no local server)."""
+    return bool(os.getenv("MISTRAL_API_KEY") or os.getenv("OPENAI_API_KEY"))
+
+
+def resolve_provider(provider: Optional[str] = None) -> str:
+    """Choose an LLM backend.
+
+    An explicit choice always wins. Otherwise prefer a hosted provider whenever
+    its API key is present: hosted deployments (Streamlit Cloud and friends)
+    cannot run a local Ollama server, so keying off the environment lets the
+    same code serve both local development and production.
+    """
+    if provider:
+        return provider
+    if os.getenv("MISTRAL_API_KEY"):
+        return "mistral"
+    if os.getenv("OPENAI_API_KEY"):
+        return "openai"
+    return "ollama"
+
+
+def _get_llm(provider: Optional[str] = None, model: Optional[str] = None,
+             temperature: float = 0.2):
     """Return a LangChain chat model instance.
 
     Args:
-        provider: "ollama" or "openai"
-        model: Model name (e.g. "mistral", "gpt-4o-mini")
+        provider: "ollama", "mistral" or "openai". None auto-detects.
+        model: Model name. None uses the provider's default.
         temperature: Sampling temperature
     """
+    provider = resolve_provider(provider)
+    model = model or _DEFAULT_MODELS.get(provider, "mistral")
+
+    if provider == "mistral":
+        from langchain_mistralai import ChatMistralAI
+        return ChatMistralAI(model=model, temperature=temperature)
+
     if provider == "openai":
         from langchain_openai import ChatOpenAI
         return ChatOpenAI(model=model, temperature=temperature)
-    else:
-        # Default: local Ollama
-        try:
-            from langchain_ollama import ChatOllama
-            return ChatOllama(model=model, temperature=temperature)
-        except ImportError:
-            # Fallback for older installs
-            from langchain_community.chat_models import ChatOllama
-            return ChatOllama(model=model, temperature=temperature)
+
+    # Default: local Ollama
+    try:
+        from langchain_ollama import ChatOllama
+        return ChatOllama(model=model, temperature=temperature)
+    except ImportError:
+        # Fallback for older installs
+        from langchain_community.chat_models import ChatOllama
+        return ChatOllama(model=model, temperature=temperature)
 
 
 def _parse_json_response(text: str) -> dict:
@@ -67,8 +107,8 @@ def generate_rationale(
     xgboost_signal: str,
     xgboost_confidence: float,
     rag_context: str,
-    provider: str = "ollama",
-    model: str = "mistral",
+    provider: Optional[str] = None,
+    model: Optional[str] = None,
 ) -> dict:
     """Generate a structured stock analysis using LangChain + LLM.
 
@@ -77,8 +117,6 @@ def generate_rationale(
         Falls back to a basic dict on failure.
     """
     from langchain_core.messages import SystemMessage, HumanMessage
-
-    llm = _get_llm(provider=provider, model=model)
 
     user_content = ANALYSIS_USER_PROMPT.format(
         ticker=ticker,
@@ -95,6 +133,9 @@ def generate_rationale(
     ]
 
     try:
+        # Constructed inside the try: a missing provider package raises here,
+        # and that should degrade to the fallback dict like any other failure.
+        llm = _get_llm(provider=provider, model=model)
         response = llm.invoke(messages)
         content = response.content if hasattr(response, "content") else str(response)
         result = _parse_json_response(content)
@@ -151,7 +192,7 @@ def _fallback_from_text(text: str, ticker: str) -> dict:
 # Quick check utility
 # ---------------------------------------------------------------------------
 
-def check_llm_available(provider: str = "ollama", model: str = "mistral") -> bool:
+def check_llm_available(provider: Optional[str] = None, model: Optional[str] = None) -> bool:
     """Check whether the LLM backend is reachable."""
     try:
         llm = _get_llm(provider=provider, model=model)
