@@ -1,9 +1,8 @@
-# sentence-transformers pulls in torch. Without this index the resolver picks
-# the CUDA build and drags in the whole nvidia-* stack (several GB), which blows
-# past the Streamlit Community Cloud resource limit. The CPU wheel is all this
-# app needs -- embeddings run on CPU.
---extra-index-url https://download.pytorch.org/whl/cpu
-torch>=2.0.0
+# Embeddings run through ChromaDB's ONNX build of all-MiniLM-L6-v2 (see
+# alpha_vantage_vector_db.py), which uses onnxruntime and produces identical
+# 384-dim vectors to the sentence-transformers build. That keeps torch and its
+# CUDA stack out of the dependency tree entirely -- this app only ever does CPU
+# inference, and the difference is gigabytes on a Streamlit Cloud deploy.
 
 langchain>=1.0.0
 langchain-community>=0.4.0
@@ -24,7 +23,6 @@ streamlit>=1.40.0
 python-dotenv==1.0.0
 scikit-learn>=1.7.0
 plotly>=5.18.0
-sentence-transformers>=3.0.0
 ollama>=0.4.4,<1.0.0
 
 # Added for OpenAI embeddings, model access and utilities

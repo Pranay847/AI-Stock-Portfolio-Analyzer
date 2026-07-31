@@ -113,31 +113,31 @@ def bench_fetch(tickers):
 def bench_embed(stock_data):
     hr("PART 2: EMBED  per-item vs batched encode  (real all-MiniLM-L6-v2)")
     try:
-        from sentence_transformers import SentenceTransformer
+        from chromadb.utils.embedding_functions import ONNXMiniLM_L6_V2
     except ImportError:
-        print("  SKIPPED — sentence-transformers not installed")
+        print("  SKIPPED — chromadb not installed")
         return
     if not stock_data:
         print("  SKIPPED — no stock data from PART 1")
         return
 
     try:
-        model = SentenceTransformer(EMBED_MODEL)
+        model = ONNXMiniLM_L6_V2()
     except Exception as e:
-        print(f"  SKIPPED — model load failed (HF blocked?): {type(e).__name__}: {str(e)[:100]}")
+        print(f"  SKIPPED — model load failed (download blocked?): {type(e).__name__}: {str(e)[:100]}")
         return
 
     texts = [to_text(d) for d in stock_data]
-    model.encode(["warmup"])  # exclude first-call / lazy-init overhead
+    model(["warmup"])  # exclude first-call / lazy-init overhead
 
     # per-item
     t0 = time.perf_counter()
-    _ = [model.encode(t).tolist() for t in texts]
+    _ = [list(map(float, model([t])[0])) for t in texts]
     per_item = time.perf_counter() - t0
 
     # batched
     t0 = time.perf_counter()
-    _ = [v.tolist() for v in model.encode(texts, batch_size=32, show_progress_bar=False)]
+    _ = [list(map(float, v)) for v in model(texts)]
     batched = time.perf_counter() - t0
 
     print(f"  texts={len(texts)}")

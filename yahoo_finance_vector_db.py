@@ -6,7 +6,7 @@ Fetch stock data → Create embeddings → Store in ChromaDB
 import yfinance as yf
 import chromadb
 from chromadb.config import Settings
-from sentence_transformers import SentenceTransformer
+from chromadb.utils.embedding_functions import ONNXMiniLM_L6_V2
 from datetime import datetime
 import json
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -23,8 +23,9 @@ class StockVectorDB:
             metadata={"description": "Stock market data"}
         )
         
-        # Load embedding model
-        self.model = SentenceTransformer('all-MiniLM-L6-v2')
+        # Load embedding model. ChromaDB's ONNX build of all-MiniLM-L6-v2 gives
+        # the same 384-dim vectors without dragging in torch.
+        self.model = ONNXMiniLM_L6_V2()
         print("✅ Vector database initialized")
     
     def fetch_stock_data(self, symbol):
@@ -72,7 +73,7 @@ class StockVectorDB:
         """
         
         # Generate embedding vector
-        embedding = self.model.encode(text).tolist()
+        embedding = list(map(float, self.model([text])[0]))
         
         return text, embedding
     
@@ -160,7 +161,7 @@ class StockVectorDB:
 
         # Step 3: batch-encode all texts in one forward pass
         print(f"   Batch-encoding {len(texts)} stocks...")
-        embeddings = [v.tolist() for v in self.model.encode(texts, batch_size=32, show_progress_bar=False)]
+        embeddings = [list(map(float, v)) for v in self.model(texts)]
 
         # Step 4: upsert everything in one ChromaDB call
         ids = [data['symbol'] for _, data in valid]
@@ -187,7 +188,7 @@ class StockVectorDB:
     def search_stocks(self, query, n_results=5):
         """Search stocks using natural language query"""
         # Create embedding for query
-        query_embedding = self.model.encode(query).tolist()
+        query_embedding = list(map(float, self.model([query])[0]))
         
         # Search in vector database
         results = self.collection.query(
