@@ -261,14 +261,19 @@ class RobinhoodPortfolioAnalyzer:
     
     # ==================== STOCK DATA & CONTEXT ====================
     
-    def get_stock_context(self, symbol: str, use_vector_db: bool = True) -> str:
+    def get_stock_context(self, symbol: str, use_vector_db: bool = True,
+                          fetch_if_missing: bool = True) -> str:
         """
         Get comprehensive context for a stock for AI analysis.
-        
+
         Args:
             symbol: Stock ticker symbol
             use_vector_db: Whether to use vector DB for additional context
-            
+            fetch_if_missing: On a vector-DB miss, fetch and index fresh data.
+                Costs an extra Alpha Vantage call plus an embedding pass per
+                symbol, so bulk scans should pass False and use whatever
+                context is already indexed.
+
         Returns:
             Context string for AI analysis
         """
@@ -300,7 +305,7 @@ Profit/Loss: ${position['profit_loss']:.2f} ({position['profit_loss_percent']:.2
                 db_context = self.vector_db.get_stock_context(symbol)
                 if db_context:
                     context_parts.append(f"\nMARKET DATA:\n{db_context}")
-                else:
+                elif fetch_if_missing:
                     # Fetch fresh data if not in DB
                     print(f"   📡 Fetching fresh data for {symbol}...")
                     result = self.vector_db.process_stock(symbol, include_news=False)
@@ -315,14 +320,18 @@ Profit/Loss: ${position['profit_loss']:.2f} ({position['profit_loss_percent']:.2
     
     # ==================== AI ANALYSIS ====================
     
-    def analyze_stock(self, symbol: str, position: dict = None) -> dict:
+    def analyze_stock(self, symbol: str, position: dict = None,
+                      fetch_missing_context: bool = True) -> dict:
         """
         Analyze a single stock and get AI recommendation.
-        
+
         Args:
             symbol: Stock ticker symbol
             position: Optional position data (will fetch from portfolio if not provided)
-            
+            fetch_missing_context: Whether to fetch+index fresh RAG context on a
+                vector-DB miss. False keeps the call to a single LLM round trip,
+                which is what bulk scans want.
+
         Returns:
             Analysis result with recommendation
         """
@@ -339,7 +348,7 @@ Profit/Loss: ${position['profit_loss']:.2f} ({position['profit_loss_percent']:.2
             }
         
         # Get comprehensive context from vector DB (RAG)
-        context = self.get_stock_context(symbol)
+        context = self.get_stock_context(symbol, fetch_if_missing=fetch_missing_context)
 
         # Use AI analysis if either LangChain reasoning or Ollama is available
         if LLM_REASONING_AVAILABLE or self.ollama_available:

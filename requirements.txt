@@ -13,7 +13,10 @@ langchain-mistralai>=1.0.0
 langgraph>=1.2.0
 mcp>=1.0.0
 faiss-cpu>=1.12.0
-xgboost>=2.0.3
+# xgboost declares nvidia-nccl-cu12 on Linux (~400 MB of NCCL for distributed
+# GPU training this app never does). xgboost-cpu is the same library and the
+# same `import xgboost`, minus the CUDA dependency.
+xgboost-cpu>=2.1.1
 pandas>=2.3.0
 numpy>=2.3.0
 yfinance>=0.2.33
