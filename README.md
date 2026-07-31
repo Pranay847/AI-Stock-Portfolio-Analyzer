@@ -113,9 +113,3 @@ not a fixed guarantee.
 - Added separate vector database workflows for Yahoo Finance, Alpha Vantage, stock, and portfolio data.
 - Organized LLM reasoning into agent, prompt, and retrieval modules instead of hard-coding explanations in the UI.
 - Included test files for data-provider and portfolio-analysis workflows.
-
-## Resume Highlights
-
-- Built an AI stock portfolio analyzer using Python, Streamlit, Pandas, XGBoost, ChromaDB, RAG, and LLM reasoning.
-- Indexed financial and portfolio data in vector databases to support semantic retrieval for stock analysis.
-- Generated portfolio insights and buy / sell / hold style signals by combining technical indicators, ML predictions, and natural-language explanations.
