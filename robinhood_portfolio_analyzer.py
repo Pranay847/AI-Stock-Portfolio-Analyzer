@@ -1,6 +1,8 @@
 import os
 import json
 import pandas as pd
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import TimeoutError as FuturesTimeoutError
 from datetime import datetime
 from typing import Optional
 from dotenv import load_dotenv
@@ -37,11 +39,18 @@ except Exception:
     Predictor = None
 
 try:
-    from agents.llm_reasoning import generate_rationale, check_llm_available
+    from agents.llm_reasoning import (
+        generate_rationale,
+        check_llm_available,
+        hosted_llm_configured,
+        resolve_provider,
+    )
     LLM_REASONING_AVAILABLE = True
 except Exception:
     LLM_REASONING_AVAILABLE = False
     generate_rationale = None
+    hosted_llm_configured = lambda: False
+    resolve_provider = lambda provider=None: "ollama"
 
 # XGBoost label encoding: 0=SELL, 1=HOLD, 2=BUY
 _LABEL_MAP = {0: "SELL", 1: "HOLD", 2: "BUY"}
@@ -59,13 +68,25 @@ class RobinhoodPortfolioAnalyzer:
         self.is_logged_in = False
         self.portfolio = []
         self.use_ollama = use_ollama
+        # Populated by analyze_portfolio with anything the caller should show
+        # the user (failures, deadline cutoffs).
+        self.last_analysis_notes = []
         
         # Initialize Mistral AI via Ollama
         self.ollama_available = False
         if use_ollama and OLLAMA_AVAILABLE:
             try:
                 models = ollama.list()
-                model_names = [m.get('name', '') for m in models.get('models', [])]
+                # ollama >= 0.4 returns pydantic objects whose field is `model`;
+                # older releases returned dicts keyed `name`. Support both, or
+                # mistral goes undetected even when it is installed.
+                raw = models.get('models', []) if hasattr(models, 'get') else models.models
+                model_names = []
+                for m in raw:
+                    name = getattr(m, 'model', None)
+                    if name is None and hasattr(m, 'get'):
+                        name = m.get('model') or m.get('name') or ''
+                    model_names.append(name or '')
                 if any('mistral' in name.lower() for name in model_names):
                     self.ollama_available = True
                     print("✅ Mistral AI ready (via Ollama)")
@@ -73,7 +94,14 @@ class RobinhoodPortfolioAnalyzer:
                     print("⚠️  Mistral not found. Run: ollama pull mistral")
             except Exception as e:
                 print(f"⚠️  Ollama not running: {e}")
-        
+
+        # A hosted provider (MISTRAL_API_KEY / OPENAI_API_KEY) needs no local
+        # server, so AI analysis can be available even when Ollama is not --
+        # which is exactly the case on Streamlit Cloud.
+        self.hosted_llm_available = LLM_REASONING_AVAILABLE and hosted_llm_configured()
+        if self.hosted_llm_available:
+            print(f"✅ Hosted LLM ready (provider: {resolve_provider()})")
+
         # Initialize vector database for RAG
         self.vector_db = None
         if VECTOR_DB_AVAILABLE:
@@ -83,7 +111,21 @@ class RobinhoodPortfolioAnalyzer:
                 print(f"⚠️  Vector DB init warning: {e}")
         
         print("✅ Robinhood Portfolio Analyzer initialized")
-    
+
+    @property
+    def ai_available(self) -> bool:
+        """Whether real LLM analysis can run, via local Ollama or a hosted API."""
+        return bool(self.ollama_available or self.hosted_llm_available)
+
+    @property
+    def ai_backend(self) -> str:
+        """Human-readable name of the active AI backend."""
+        if self.hosted_llm_available:
+            return f"{resolve_provider().title()} API"
+        if self.ollama_available:
+            return "Mistral (local Ollama)"
+        return "Rule-Based"
+
     # ==================== ROBINHOOD CONNECTION ====================
     
     def login(self, username: str = None, password: str = None, mfa_code: str = None) -> bool:
@@ -224,14 +266,19 @@ class RobinhoodPortfolioAnalyzer:
     
     # ==================== STOCK DATA & CONTEXT ====================
     
-    def get_stock_context(self, symbol: str, use_vector_db: bool = True) -> str:
+    def get_stock_context(self, symbol: str, use_vector_db: bool = True,
+                          fetch_if_missing: bool = True) -> str:
         """
         Get comprehensive context for a stock for AI analysis.
-        
+
         Args:
             symbol: Stock ticker symbol
             use_vector_db: Whether to use vector DB for additional context
-            
+            fetch_if_missing: On a vector-DB miss, fetch and index fresh data.
+                Costs an extra Alpha Vantage call plus an embedding pass per
+                symbol, so bulk scans should pass False and use whatever
+                context is already indexed.
+
         Returns:
             Context string for AI analysis
         """
@@ -263,7 +310,7 @@ Profit/Loss: ${position['profit_loss']:.2f} ({position['profit_loss_percent']:.2
                 db_context = self.vector_db.get_stock_context(symbol)
                 if db_context:
                     context_parts.append(f"\nMARKET DATA:\n{db_context}")
-                else:
+                elif fetch_if_missing:
                     # Fetch fresh data if not in DB
                     print(f"   📡 Fetching fresh data for {symbol}...")
                     result = self.vector_db.process_stock(symbol, include_news=False)
@@ -278,14 +325,18 @@ Profit/Loss: ${position['profit_loss']:.2f} ({position['profit_loss_percent']:.2
     
     # ==================== AI ANALYSIS ====================
     
-    def analyze_stock(self, symbol: str, position: dict = None) -> dict:
+    def analyze_stock(self, symbol: str, position: dict = None,
+                      fetch_missing_context: bool = True) -> dict:
         """
         Analyze a single stock and get AI recommendation.
-        
+
         Args:
             symbol: Stock ticker symbol
             position: Optional position data (will fetch from portfolio if not provided)
-            
+            fetch_missing_context: Whether to fetch+index fresh RAG context on a
+                vector-DB miss. False keeps the call to a single LLM round trip,
+                which is what bulk scans want.
+
         Returns:
             Analysis result with recommendation
         """
@@ -302,7 +353,7 @@ Profit/Loss: ${position['profit_loss']:.2f} ({position['profit_loss_percent']:.2
             }
         
         # Get comprehensive context from vector DB (RAG)
-        context = self.get_stock_context(symbol)
+        context = self.get_stock_context(symbol, fetch_if_missing=fetch_missing_context)
 
         # Use AI analysis if either LangChain reasoning or Ollama is available
         if LLM_REASONING_AVAILABLE or self.ollama_available:
@@ -410,6 +461,12 @@ Profit/Loss: ${position['profit_loss']:.2f} ({position['profit_loss_percent']:.2
         else:
             result = self._ollama_fallback(position, context)
 
+        # A failed LLM call still returns a well-formed dict tagged llm_error.
+        # Fall back to the deterministic rules rather than presenting the error
+        # string to the user as a real recommendation.
+        if result.get('analysis_type') == 'llm_error':
+            result = self._rule_based_analysis(position)
+
         result['symbol'] = ticker
         result.setdefault('current_price', position['current_price'])
         result.setdefault('profit_loss_percent', position['profit_loss_percent'])
@@ -444,39 +501,97 @@ Profit/Loss: ${position['profit_loss']:.2f} ({position['profit_loss_percent']:.2
             print(f"   ⚠️  Ollama fallback error: {e}")
             return self._rule_based_analysis(position)
     
-    def analyze_portfolio(self, max_stocks: int = None) -> list[dict]:
+    def analyze_portfolio(self, max_stocks: int = None, max_workers: int = 3,
+                          deadline_seconds: int = 240,
+                          progress_callback=None,
+                          fetch_missing_context: bool = True) -> list[dict]:
         """
         Analyze all stocks in portfolio.
-        
+
+        Positions are analyzed concurrently: each one costs a full LLM round
+        trip, so a sizeable portfolio run sequentially would keep the caller
+        waiting for minutes. A wall-clock deadline bounds the whole run, and
+        anything still unfinished is reported via `last_analysis_notes` rather
+        than blocking indefinitely.
+
         Args:
             max_stocks: Maximum number of stocks to analyze (for API limits)
-            
+            max_workers: Concurrent analyses in flight. Kept modest because
+                each one may write freshly indexed context to ChromaDB.
+            deadline_seconds: Give up on stragglers after this long
+            progress_callback: Called as (completed, total, symbol) on the
+                calling thread, so it is safe to drive UI widgets from it.
+            fetch_missing_context: Passed to analyze_stock. True keeps the RAG
+                backfill (better analysis, extra API call per symbol).
+
         Returns:
-            List of analysis results
+            List of analysis results, in portfolio order. Positions that did
+            not finish before the deadline are omitted; see
+            `last_analysis_notes` for what was dropped.
         """
+        self.last_analysis_notes = []
+
         if not self.portfolio:
             print("❌ No portfolio data. Call fetch_portfolio() first.")
             return []
-        
+
         stocks_to_analyze = self.portfolio[:max_stocks] if max_stocks else self.portfolio
-        
+        total = len(stocks_to_analyze)
+
         print(f"\n{'='*60}")
-        print(f"🤖 ANALYZING {len(stocks_to_analyze)} STOCKS")
+        print(f"🤖 ANALYZING {total} STOCKS")
         print('='*60)
-        
-        results = []
-        for i, position in enumerate(stocks_to_analyze, 1):
-            symbol = position['symbol']
-            print(f"\n[{i}/{len(stocks_to_analyze)}] Analyzing {symbol}...")
-            
-            result = self.analyze_stock(symbol, position)
-            results.append(result)
-            
-            # Print quick summary
-            rec = result['recommendation']
-            emoji = {'BUY': '🟢', 'SELL': '🔴', 'HOLD': '🟡'}.get(rec, '⚪')
-            print(f"   {emoji} {rec} (confidence: {result['confidence']}%)")
-        
+
+        results_by_symbol = {}
+        completed = 0
+
+        executor = ThreadPoolExecutor(max_workers=max_workers)
+        try:
+            futures = {
+                executor.submit(self.analyze_stock, p['symbol'], p,
+                                fetch_missing_context): p['symbol']
+                for p in stocks_to_analyze
+            }
+            try:
+                for future in as_completed(futures, timeout=deadline_seconds):
+                    symbol = futures[future]
+                    completed += 1
+                    try:
+                        result = future.result()
+                    except Exception as e:
+                        note = f"⚠️  {symbol} failed: {e}"
+                        print(f"   {note}")
+                        self.last_analysis_notes.append(note)
+                        continue
+
+                    results_by_symbol[symbol] = result
+                    # Printed here, on the main thread, so concurrent analyses
+                    # do not interleave their output.
+                    rec = result['recommendation']
+                    emoji = {'BUY': '🟢', 'SELL': '🔴', 'HOLD': '🟡'}.get(rec, '⚪')
+                    print(f"[{completed}/{total}] {symbol}: "
+                          f"{emoji} {rec} (confidence: {result['confidence']}%)")
+
+                    if progress_callback:
+                        progress_callback(completed, total, symbol)
+            except FuturesTimeoutError:
+                unfinished = [s for f, s in futures.items() if not f.done()]
+                for f in futures:
+                    f.cancel()
+                note = (f"⏱️  Stopped after {deadline_seconds}s with "
+                        f"{len(unfinished)} position(s) unfinished "
+                        f"({', '.join(unfinished[:5])}"
+                        f"{'...' if len(unfinished) > 5 else ''}). "
+                        f"Showing partial results.")
+                print(f"   {note}")
+                self.last_analysis_notes.append(note)
+        finally:
+            executor.shutdown(wait=False, cancel_futures=True)
+
+        # Return in portfolio order, not completion order.
+        results = [results_by_symbol[p['symbol']] for p in stocks_to_analyze
+                   if p['symbol'] in results_by_symbol]
+
         # Summary
         print(f"\n{'='*60}")
         print("📊 ANALYSIS SUMMARY")

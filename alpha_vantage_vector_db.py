@@ -1,7 +1,7 @@
 import os
 import requests
 import chromadb
-from sentence_transformers import SentenceTransformer
+from chromadb.utils.embedding_functions import ONNXMiniLM_L6_V2
 from datetime import datetime, timedelta
 import json
 import time
@@ -65,8 +65,11 @@ class AlphaVantageVectorDB:
             metadata={"description": "Stock news and sentiment"}
         )
         
-        # Load embedding model (all-MiniLM-L6-v2 is fast and good quality)
-        self.embedding_model = SentenceTransformer('all-MiniLM-L6-v2')
+        # Load embedding model (all-MiniLM-L6-v2 is fast and good quality).
+        # ChromaDB's ONNX build of the same model runs on onnxruntime, which
+        # avoids pulling in torch (~750 MB) for what is a CPU inference job.
+        # Produces identical 384-dim vectors to the sentence-transformers build.
+        self.embedding_model = ONNXMiniLM_L6_V2()
 
         # In-memory TTL cache: {cache_key: (data, expires_at)}
         self._cache: dict = {}
@@ -115,7 +118,7 @@ class AlphaVantageVectorDB:
         }
 
         try:
-            response = requests.get(self.base_url, params=params)
+            response = requests.get(self.base_url, params=params, timeout=15)
             response.raise_for_status()
             data = response.json()
 
@@ -176,7 +179,7 @@ class AlphaVantageVectorDB:
         }
 
         try:
-            response = requests.get(self.base_url, params=params)
+            response = requests.get(self.base_url, params=params, timeout=15)
             response.raise_for_status()
             data = response.json()
 
@@ -244,7 +247,7 @@ class AlphaVantageVectorDB:
         }
 
         try:
-            response = requests.get(self.base_url, params=params)
+            response = requests.get(self.base_url, params=params, timeout=15)
             response.raise_for_status()
             data = response.json()
 
@@ -395,11 +398,11 @@ Relevance: {news_item['relevance_score']:.2f}
     
     def create_embedding(self, text: str) -> list[float]:
         """Convert a single text to an embedding vector."""
-        return self.embedding_model.encode(text).tolist()
+        return self.create_embeddings_batch([text])[0]
 
     def create_embeddings_batch(self, texts: list[str]) -> list[list[float]]:
         """Batch-encode multiple texts in one model forward pass (much faster than one-by-one)."""
-        return [v.tolist() for v in self.embedding_model.encode(texts, batch_size=32, show_progress_bar=False)]
+        return [list(map(float, v)) for v in self.embedding_model(texts)]
     
     def store_quote(self, quote_data: dict) -> bool:
         """

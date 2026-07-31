@@ -20,12 +20,12 @@ def test_imports():
         return False
     
     try:
-        from sentence_transformers import SentenceTransformer
-        print("   ✅ sentence_transformers")
+        from chromadb.utils.embedding_functions import ONNXMiniLM_L6_V2
+        print("   ✅ chromadb ONNX embedder")
     except ImportError as e:
-        print(f"   ❌ sentence_transformers: {e}")
+        print(f"   ❌ chromadb ONNX embedder: {e}")
         return False
-    
+
     try:
         import requests
         print("   ✅ requests")
@@ -63,13 +63,13 @@ def test_embedding_model():
     print("\n3️⃣  Testing embedding model...")
     
     try:
-        from sentence_transformers import SentenceTransformer
-        model = SentenceTransformer('all-MiniLM-L6-v2')
-        
+        from chromadb.utils.embedding_functions import ONNXMiniLM_L6_V2
+        model = ONNXMiniLM_L6_V2()
+
         # Test encoding
         test_text = "Apple Inc is a technology company"
-        embedding = model.encode(test_text)
-        
+        embedding = model([test_text])[0]
+
         print(f"   ✅ Model loaded successfully")
         print(f"   ✅ Embedding dimension: {len(embedding)}")
         return True

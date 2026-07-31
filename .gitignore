@@ -1,3 +1,13 @@
 venv/
+.venv/
 __pycache__/
 .env
+
+# ChromaDB stores are regenerable caches and must not be committed. The copies
+# previously tracked here were written by an older chromadb than the one in
+# requirements.txt, which cannot read them (TypeError in _decode_seq_id).
+*_vector_db/
+my_stocks/
+test_db/
+logs/
+.pytest_cache/

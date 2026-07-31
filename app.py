@@ -1,7 +1,22 @@
+import os
 import streamlit as st
 import pandas as pd
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import TimeoutError as FuturesTimeoutError
 from datetime import datetime
+
+# Streamlit Cloud supplies configuration through st.secrets rather than a .env
+# file. Copy those values into the environment before anything else imports the
+# analyzer modules, which read their keys via os.getenv at import/init time.
+try:
+    for _key in ("ALPHA_VANTAGE_API_KEY", "ALPHAVANTAGE_API_KEY",
+                 "MISTRAL_API_KEY", "OPENAI_API_KEY"):
+        if _key in st.secrets and not os.getenv(_key):
+            os.environ[_key] = str(st.secrets[_key])
+except Exception:
+    # No secrets.toml locally -- .env / real env vars are used instead.
+    pass
 
 # Company name to ticker symbol mapping
 COMPANY_TO_TICKER = {
@@ -57,16 +72,17 @@ def resolve_ticker(input_str: str) -> tuple[str, bool]:
         return '', False
     
     cleaned = input_str.strip().upper()
-    
-    # First check if it's already a valid ticker format (short, alphanumeric)
-    if len(cleaned) <= 5 and cleaned.replace('-', '').isalnum():
-        # Likely already a ticker
-        return cleaned, True
-    
-    # Try to find in company mapping
+
+    # Check the company mapping before the ticker-shape heuristic. Short company
+    # names (APPLE, TESLA, VISA, FORD...) look like tickers, so testing shape
+    # first would pass them through unmapped and fail the quote lookup.
     if cleaned in COMPANY_TO_TICKER:
         return COMPANY_TO_TICKER[cleaned], True
-    
+
+    # Already a valid ticker format (short, alphanumeric)
+    if len(cleaned) <= 5 and cleaned.replace('-', '').isalnum():
+        return cleaned, True
+
     # Try partial matches (e.g., "MICROSOFT CORP" -> "MICROSOFT")
     for company_name, ticker in COMPANY_TO_TICKER.items():
         if company_name in cleaned or cleaned in company_name:
@@ -111,8 +127,12 @@ if 'portfolio_data' not in st.session_state:
     st.session_state.portfolio_data = []
 if 'portfolio_analysis' not in st.session_state:
     st.session_state.portfolio_analysis = []
+if 'portfolio_notes' not in st.session_state:
+    st.session_state.portfolio_notes = []
 if 'sp500_data' not in st.session_state:
     st.session_state.sp500_data = []
+if 'sp500_notes' not in st.session_state:
+    st.session_state.sp500_notes = []
 if 'robinhood_connected' not in st.session_state:
     st.session_state.robinhood_connected = False
 if 'show_login_form' not in st.session_state:
@@ -234,8 +254,11 @@ def analyze_individual_stock(symbol: str) -> dict:
                     f"Price: ${current_price:.2f} | Change: {change_percent:.2f}%"
                 )
                 analysis = run_analysis(symbol, portfolio_status=portfolio_status)
-                if not analysis.get("recommendation"):
-                    raise ValueError("empty langgraph result")
+                # An unreachable LLM still returns a well-formed dict tagged
+                # llm_error. Treat that as a failure so we fall back to the
+                # analyzer instead of surfacing a fabricated HOLD.
+                if not analysis.get("recommendation") or analysis.get("analysis_type") == "llm_error":
+                    raise ValueError("langgraph produced no usable result")
             except Exception:
                 analysis = analyzer.analyze_stock(symbol, position)
 
@@ -353,17 +376,20 @@ def analyze_individual_stock(symbol: str) -> dict:
     }
 
 
-def analyze_portfolio_stocks() -> pd.DataFrame:
+def analyze_portfolio_stocks(progress_callback=None) -> pd.DataFrame:
     """Analyze all stocks in the Robinhood portfolio."""
     if not st.session_state.portfolio_data:
         return pd.DataFrame()
-    
+
     analyzer = st.session_state.analyzer
     if analyzer:
-        # Run AI analysis on portfolio
-        results = analyzer.analyze_portfolio()
+        # Run AI analysis on portfolio (positions analyzed concurrently)
+        results = analyzer.analyze_portfolio(progress_callback=progress_callback)
         st.session_state.portfolio_analysis = results
-        
+        st.session_state.portfolio_notes = list(
+            getattr(analyzer, 'last_analysis_notes', []) or []
+        )
+
         # Convert to DataFrame
         data = []
         for r in results:
@@ -380,98 +406,145 @@ def analyze_portfolio_stocks() -> pd.DataFrame:
     return pd.DataFrame()
 
 
-def analyze_sp500(num_stocks: int = 10, progress_callback=None):
+SP500_MAX_WORKERS = 4
+SP500_DEADLINE_SECONDS = 150
+
+
+def analyze_sp500(num_stocks: int = 10, progress_callback=None,
+                  max_workers: int = SP500_MAX_WORKERS,
+                  deadline_seconds: int = SP500_DEADLINE_SECONDS):
     """
     Analyze top S&P 500 stocks with real-time data and AI analysis.
-    
+
+    Each symbol costs one Alpha Vantage quote plus one LLM round trip, so the
+    symbols are analyzed concurrently rather than one after another -- run
+    sequentially a 10-stock scan took minutes and left the page spinning. A
+    wall-clock deadline caps the whole scan so a slow or unresponsive LLM
+    yields partial results instead of an open-ended hang.
+
     Args:
         num_stocks: Number of stocks to analyze (limited by API rate limits)
-        progress_callback: Optional callback for progress updates
+        progress_callback: Optional callback for progress updates. Invoked on
+            the calling thread, so it is safe to touch Streamlit widgets.
+        max_workers: Concurrent analyses in flight
+        deadline_seconds: Give up on stragglers after this long
+
+    Returns:
+        Tuple of (DataFrame, list of human-readable notes)
     """
     # Top S&P 500 stocks by market cap
     sp500_top = [
         'AAPL', 'MSFT', 'GOOGL', 'AMZN', 'NVDA', 'META', 'TSLA', 'BRK-B', 'UNH', 'JNJ',
         'V', 'XOM', 'JPM', 'PG', 'MA', 'HD', 'CVX', 'MRK', 'LLY', 'ABBV'
     ]
-    
+
     stocks_to_analyze = sp500_top[:num_stocks]
-    data = []
-    
+    notes = []
+
     # Get analyzer with AI
     analyzer = get_analyzer()
-    
-    if not analyzer or not analyzer.ollama_available:
-        st.error("⚠️ Mistral AI not available. Please ensure Ollama is running with Mistral model.")
-        return pd.DataFrame()
-    
-    for i, symbol in enumerate(stocks_to_analyze):
+
+    if not analyzer or not analyzer.ai_available:
+        st.error(
+            "⚠️ AI analysis not available. Either run Ollama locally with the "
+            "Mistral model, or set MISTRAL_API_KEY (or OPENAI_API_KEY) to use a "
+            "hosted provider."
+        )
+        return pd.DataFrame(), notes
+
+    def analyze_one(symbol: str) -> dict:
+        """Analyze a single symbol. Runs on a worker thread, so it must not
+        touch Streamlit APIs -- it returns a row and lets the caller render."""
+        current_price = 0
+        change_percent = 0
+
+        if analyzer.vector_db:
+            quote = analyzer.vector_db.fetch_quote(symbol)
+            if quote:
+                current_price = quote.get('price', 0)
+                change_percent = float(quote.get('change_percent', 0))
+
+        if current_price == 0:
+            return {'Symbol': symbol, '_skip': f"⚠️ Skipped {symbol} — no market data available"}
+
+        position = {
+            'symbol': symbol,
+            'name': symbol,
+            'quantity': 0,
+            'average_buy_price': current_price,
+            'current_price': current_price,
+            'equity': 0,
+            'cost_basis': 0,
+            'profit_loss': 0,
+            'profit_loss_percent': change_percent,
+            'timestamp': datetime.now().isoformat()
+        }
+
+        # Skip the RAG backfill: it costs an extra API call and an embedding
+        # pass per symbol, which is what made a full scan unaffordable.
+        analysis = analyzer.analyze_stock(symbol, position, fetch_missing_context=False)
+        recommendation = analysis.get('recommendation', 'HOLD')
+        confidence = analysis.get('confidence', 50)
+
+        if recommendation == 'BUY':
+            target_price = current_price * 1.15
+        elif recommendation == 'SELL':
+            target_price = current_price * 0.95
+        else:
+            target_price = current_price * 1.05
+
+        return {
+            'Symbol': symbol,
+            'Price': f"${current_price:.2f}",
+            'Change': f"{change_percent:+.2f}%",
+            'Target': f"${target_price:.2f}",
+            'Recommendation': recommendation,
+            'Confidence': f"{confidence}%"
+        }
+
+    rows_by_symbol = {}
+    total = len(stocks_to_analyze)
+    completed = 0
+
+    executor = ThreadPoolExecutor(max_workers=max_workers)
+    try:
+        futures = {executor.submit(analyze_one, s): s for s in stocks_to_analyze}
         try:
-            if progress_callback:
-                progress_callback(i + 1, len(stocks_to_analyze), symbol)
-            
-            # Get real-time quote from Alpha Vantage (only 1 API call)
-            current_price = 0
-            change_percent = 0
-            
-            if analyzer.vector_db:
-                quote = analyzer.vector_db.fetch_quote(symbol)
-                if quote:
-                    current_price = quote.get('price', 0)
-                    change_percent = float(quote.get('change_percent', 0))
-            
-            # Skip if no real data available
-            if current_price == 0:
-                st.warning(f"⚠️ Skipping {symbol} - no data available")
-                continue
-            
-            # Always use AI analysis
-            position = {
-                'symbol': symbol,
-                'name': symbol,
-                'quantity': 0,
-                'average_buy_price': current_price,
-                'current_price': current_price,
-                'equity': 0,
-                'cost_basis': 0,
-                'profit_loss': 0,
-                'profit_loss_percent': change_percent,
-                'timestamp': datetime.now().isoformat()
-            }
-            
-            # Get AI recommendation from Mistral
-            analysis = analyzer.analyze_stock(symbol, position)
-            recommendation = analysis.get('recommendation', 'HOLD')
-            confidence = analysis.get('confidence', 50)
-            
-            # Calculate target based on AI recommendation
-            if recommendation == 'BUY':
-                target_price = current_price * 1.15
-            elif recommendation == 'SELL':
-                target_price = current_price * 0.95
-            else:
-                target_price = current_price * 1.05
-            
-            data.append({
-                'Symbol': symbol,
-                'Price': f"${current_price:.2f}" if current_price > 0 else "N/A",
-                'Change': f"{change_percent:+.2f}%",
-                'Target': f"${target_price:.2f}" if target_price > 0 else "N/A",
-                'Recommendation': recommendation,
-                'Confidence': f"{confidence}%"
-            })
-            
-        except Exception as e:
-            # Fallback for this stock
-            data.append({
-                'Symbol': symbol,
-                'Price': "Error",
-                'Change': "N/A",
-                'Target': "N/A",
-                'Recommendation': 'N/A',
-                'Confidence': "0%"
-            })
-    
-    return pd.DataFrame(data)
+            for future in as_completed(futures, timeout=deadline_seconds):
+                symbol = futures[future]
+                completed += 1
+                if progress_callback:
+                    progress_callback(completed, total, symbol)
+                try:
+                    row = future.result()
+                except Exception as e:
+                    notes.append(f"⚠️ {symbol} failed: {e}")
+                    rows_by_symbol[symbol] = {
+                        'Symbol': symbol, 'Price': "Error", 'Change': "N/A",
+                        'Target': "N/A", 'Recommendation': 'N/A', 'Confidence': "0%"
+                    }
+                    continue
+                if row.get('_skip'):
+                    notes.append(row['_skip'])
+                else:
+                    rows_by_symbol[symbol] = row
+        except FuturesTimeoutError:
+            unfinished = [s for f, s in futures.items() if not f.done()]
+            for f in futures:
+                f.cancel()
+            notes.append(
+                f"⏱️ Stopped after {deadline_seconds}s with {len(unfinished)} "
+                f"stock(s) unfinished ({', '.join(unfinished[:5])}"
+                f"{'...' if len(unfinished) > 5 else ''}). Showing partial "
+                f"results — try fewer stocks or a faster LLM provider."
+            )
+    finally:
+        # Do not block shutdown on stragglers we already gave up on.
+        executor.shutdown(wait=False, cancel_futures=True)
+
+    # Preserve the original market-cap ordering rather than completion order.
+    data = [rows_by_symbol[s] for s in stocks_to_analyze if s in rows_by_symbol]
+    return pd.DataFrame(data), notes
 
 
 # ==================== UI ====================
@@ -607,7 +680,7 @@ with tab1:
         stock_symbol = st.text_input(
             "Enter Stock Symbol or Company Name",
             placeholder="e.g., AAPL, TSLA, GOOGL",
-            max_chars=10,
+            max_chars=25,
             help="Enter the ticker symbol (e.g., MSFT for Microsoft, AAPL for Apple)"
         ).upper()
     
@@ -664,7 +737,7 @@ with tab1:
             st.metric("Confidence Score", f"{result['confidence']}%")
         
         # Recommendation
-        st.markdown(f"### Recommendation: :{rec_color[result['recommendation']]}[**{result['recommendation']}**]")
+        st.markdown(f"### Recommendation: :{rec_color.get(result['recommendation'], 'gray')}[**{result['recommendation']}**]")
         
         # Holding Period
         col1, col2 = st.columns(2)
@@ -761,18 +834,31 @@ with tab2:
             st.markdown(f"**{len(st.session_state.portfolio_data)} stocks in portfolio**")
             # Show AI status
             analyzer = st.session_state.analyzer
-            if analyzer and analyzer.ollama_available:
-                st.caption("🤖 Mistral AI Ready")
+            if analyzer and analyzer.ai_available:
+                st.caption(f"🤖 AI Ready — {analyzer.ai_backend}")
             else:
                 st.caption("📊 Rule-Based Analysis")
         
         with col2:
             if st.button("🤖 Analyze with AI", type="primary", use_container_width=True):
+                progress_bar = st.progress(0)
+                status_text = st.empty()
+
+                def update_portfolio_progress(current, total, symbol):
+                    progress_bar.progress(current / total)
+                    status_text.text(f"🤖 Analyzed {symbol}... ({current}/{total})")
+
                 with st.spinner("AI is analyzing your portfolio... 🤖"):
-                    df = analyze_portfolio_stocks()
+                    df = analyze_portfolio_stocks(update_portfolio_progress)
                     if not df.empty:
                         st.session_state.portfolio_data_df = df
-        
+
+                progress_bar.empty()
+                status_text.empty()
+
+        for note in st.session_state.portfolio_notes:
+            st.warning(note)
+
         # Show analysis results
         if st.session_state.portfolio_analysis:
             results = st.session_state.portfolio_analysis
@@ -847,40 +933,49 @@ with tab3:
     
     # Check AI availability
     analyzer = get_analyzer()
-    if analyzer and analyzer.ollama_available:
-        st.markdown("Real-time analysis of top S&P 500 stocks with **🤖 Mistral AI** recommendations")
+    if analyzer and analyzer.ai_available:
+        st.markdown(f"Real-time analysis of top S&P 500 stocks with **🤖 {analyzer.ai_backend}** recommendations")
     else:
         st.markdown("Real-time analysis of top S&P 500 stocks")
-        st.info("💡 Install Ollama + Mistral for AI-powered analysis (see Individual Stock tab for instructions)")
+        st.info("💡 Set MISTRAL_API_KEY for hosted AI analysis, or run Ollama locally with the Mistral model.")
     
     col1, col2 = st.columns([3, 1])
     
     with col1:
-        num_stocks = st.slider("Number of stocks to analyze", 5, 20, 10, 
+        num_stocks = st.slider("Number of stocks to analyze", 5, 20, 10,
                                help="⚠️ Alpha Vantage free tier: 25 API calls/day. Each stock uses 1 call.")
         st.caption("💡 Free API tier has daily limits. Start with fewer stocks if you've been testing.")
-    
+
     with col2:
         st.write("")  # Spacing
         analyze_sp500_btn = st.button("🔄 Run Analysis", type="primary", use_container_width=True)
-    
+
     if analyze_sp500_btn:
         progress_bar = st.progress(0)
         status_text = st.empty()
-        
+
         def update_progress(current, total, symbol):
             progress_bar.progress(current / total)
-            status_text.text(f"🤖 AI analyzing {symbol}... ({current}/{total})")
-        
-        with st.spinner("Running AI analysis with Mistral... 🤖"):
-            st.session_state.sp500_data = analyze_sp500(num_stocks, update_progress)
-        
+            status_text.text(f"🤖 Analyzed {symbol}... ({current}/{total})")
+
+        backend = analyzer.ai_backend if analyzer else "AI"
+        with st.spinner(f"Running AI analysis with {backend}... 🤖"):
+            df, notes = analyze_sp500(num_stocks, update_progress)
+            st.session_state.sp500_data = df
+            st.session_state.sp500_notes = notes
+
         progress_bar.empty()
         status_text.empty()
         st.rerun()
+
+    for note in st.session_state.sp500_notes:
+        st.warning(note)
     
     if len(st.session_state.sp500_data) > 0:
-        st.success(f"✅ AI analysis complete! Analyzed {len(st.session_state.sp500_data)} stocks with Mistral AI")
+        st.success(
+            f"✅ AI analysis complete! Analyzed {len(st.session_state.sp500_data)} "
+            f"stocks with {analyzer.ai_backend if analyzer else 'AI'}"
+        )
         
         # Summary metrics
         df = st.session_state.sp500_data
