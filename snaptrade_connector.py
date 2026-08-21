@@ -60,9 +60,19 @@ def _to_float(value, default=0.0) -> float:
 class SnapTradeConnector:
     """Thin wrapper over the SnapTrade SDK for read-only portfolio access."""
 
-    def __init__(self, client_id: Optional[str] = None, consumer_key: Optional[str] = None):
+    def __init__(
+        self,
+        client_id: Optional[str] = None,
+        consumer_key: Optional[str] = None,
+        auth_mode: Optional[str] = None,
+    ):
         self.client_id = client_id or os.getenv("SNAPTRADE_CLIENT_ID")
         self.consumer_key = consumer_key or os.getenv("SNAPTRADE_CONSUMER_KEY")
+        # "commercial" (build for end users) or "personal" (free key, your own
+        # accounts only). See https://docs.snaptrade.com/docs/personal-vs-commercial
+        self.auth_mode = (
+            auth_mode or os.getenv("SNAPTRADE_AUTH_MODE", "commercial")
+        ).strip().lower()
         self._client = None
 
     @property
@@ -78,8 +88,13 @@ class SnapTradeConnector:
                     "SnapTrade is not configured. Set SNAPTRADE_CLIENT_ID and "
                     "SNAPTRADE_CONSUMER_KEY, and install snaptrade-python-sdk."
                 )
+            make_auth = (
+                SnapTradeAuth.personal_api_key
+                if self.auth_mode.startswith("personal")
+                else SnapTradeAuth.commercial_api_key
+            )
             self._client = SnapTrade(
-                auth=SnapTradeAuth.commercial_api_key(
+                auth=make_auth(
                     consumer_key=self.consumer_key,
                     client_id=self.client_id,
                 )

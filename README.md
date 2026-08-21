@@ -87,12 +87,22 @@ Robinhood login form when running locally, set `DEMO_MODE=false` in `.env`.
 
 ### Connecting a real account safely
 
-Set `SNAPTRADE_CLIENT_ID` and `SNAPTRADE_CONSUMER_KEY` (free keys from
-[SnapTrade](https://snaptrade.com)) and visitors can connect their own Robinhood account
-from the deployed app. The user authenticates on SnapTrade's hosted portal, so this app
-never receives a password — it holds only a session-scoped access pair used to read
-positions. This is the recommended path for any public deployment, since Robinhood has no
-official OAuth and `robin_stocks` requires the account password directly.
+Set `SNAPTRADE_CLIENT_ID` and `SNAPTRADE_CONSUMER_KEY` from
+[SnapTrade](https://snaptrade.com) and users can connect a Robinhood account from the
+deployed app. They authenticate on SnapTrade's hosted portal, so this app never receives a
+password — it holds only a session-scoped access pair used to read positions. This is the
+recommended path for any public deployment, since Robinhood has no official OAuth and
+`robin_stocks` requires the account password directly.
+
+SnapTrade issues two kinds of key, selected with `SNAPTRADE_AUTH_MODE`:
+
+| Mode | Key type | Who can connect |
+|------|----------|-----------------|
+| `personal` | Free, one per person | Only your own brokerage accounts |
+| `commercial` | Paid / approval-gated | Any visitor connects their own account |
+
+Use `personal` to run this against your own portfolio at no cost. A public deployment where
+strangers connect their own accounts requires a `commercial` key.
 
 LLM explanations resolve their backend automatically: OpenAI when `OPENAI_API_KEY` is set,
 otherwise local Ollama. If neither is reachable, the app still runs and shows the XGBoost
