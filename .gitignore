@@ -16,3 +16,6 @@ __pycache__/
 
 # Local model / benchmark artifacts
 _chroma_bench/
+
+# Streamlit local secrets
+.streamlit/secrets.toml

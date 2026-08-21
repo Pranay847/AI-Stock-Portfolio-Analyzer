@@ -4,10 +4,24 @@ import pandas as pd
 import time
 from datetime import datetime
 
+def get_config(name: str, default: str = None):
+    """Read config from Streamlit secrets first, then the environment.
+
+    Streamlit Cloud supplies secrets through st.secrets, while local runs use a
+    .env file, so both sources are checked.
+    """
+    try:
+        if name in st.secrets:
+            return str(st.secrets[name])
+    except Exception:
+        pass
+    return os.getenv(name, default)
+
+
 # Demo mode hides the brokerage login and uses mock data instead. It defaults to
 # on so public deployments never collect real credentials; set DEMO_MODE=false
-# in a local .env to connect a real Robinhood account.
-DEMO_MODE = os.getenv("DEMO_MODE", "true").strip().lower() not in ("false", "0", "no")
+# to connect a real Robinhood account directly.
+DEMO_MODE = str(get_config("DEMO_MODE", "true")).strip().lower() not in ("false", "0", "no")
 
 # Company name to ticker symbol mapping
 COMPANY_TO_TICKER = {
@@ -92,20 +106,74 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# Custom CSS for better styling
+# Custom CSS. Colours are inherited from the Streamlit theme (see
+# .streamlit/config.toml) rather than hard-coded, so this works in light and dark.
 st.markdown("""
     <style>
-    .main {
-        padding: 0rem 1rem;
+    /* ---- layout ---- */
+    .block-container { padding-top: 2.2rem; padding-bottom: 3rem; max-width: 1280px; }
+    #MainMenu, footer { visibility: hidden; }
+
+    /* ---- hero ---- */
+    .hero {
+        border: 1px solid rgba(128,150,180,.22);
+        background: linear-gradient(135deg, rgba(79,140,255,.16), rgba(79,140,255,.02) 60%);
+        border-radius: 16px;
+        padding: 1.5rem 1.75rem;
+        margin-bottom: 1.6rem;
     }
-    .stButton>button {
-        width: 100%;
+    .hero h1 { margin: 0; font-size: 2rem; font-weight: 700; letter-spacing: -.5px; }
+    /* gradient applies only to the words - an emoji inside a clipped
+       background renders as a solid block, so it stays outside */
+    .hero h1 .grad {
+        background: linear-gradient(90deg, #4f8cff, #9b8cff);
+        -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+        background-clip: text;
     }
+    .hero p { margin: .4rem 0 0; opacity: .72; font-size: .95rem; }
+
+    /* ---- empty-state feature strip ---- */
+    .feat {
+        border: 1px solid rgba(128,150,180,.18);
+        background: rgba(128,150,180,.05);
+        border-radius: 12px; padding: 1rem 1.15rem; height: 100%;
+    }
+    .feat h4 { margin: 0 0 .35rem; font-size: .92rem; font-weight: 700; }
+    .feat p { margin: 0; font-size: .84rem; opacity: .68; line-height: 1.45; }
+
+    /* ---- metrics as cards ---- */
+    div[data-testid="stMetric"] {
+        background: rgba(128,150,180,.07);
+        border: 1px solid rgba(128,150,180,.18);
+        border-radius: 12px;
+        padding: .9rem 1.1rem;
+    }
+    div[data-testid="stMetricLabel"] { opacity: .7; font-size: .8rem; }
+
+    /* ---- tabs ---- */
+    button[data-baseweb="tab"] { font-weight: 600; padding: .35rem .1rem; }
+    div[data-baseweb="tab-list"] { gap: 1.6rem; border-bottom: 1px solid rgba(128,150,180,.18); }
+
+    /* ---- buttons ---- */
+    .stButton > button {
+        width: 100%; border-radius: 9px; font-weight: 600;
+        transition: transform .06s ease, filter .15s ease;
+    }
+    .stButton > button:hover { filter: brightness(1.08); }
+    .stButton > button:active { transform: translateY(1px); }
+
+    /* ---- inputs ---- */
+    div[data-baseweb="input"] input, div[data-baseweb="select"] { border-radius: 9px; }
+
+    /* ---- sidebar ---- */
+    section[data-testid="stSidebar"] { border-right: 1px solid rgba(128,150,180,.16); }
+    section[data-testid="stSidebar"] h2 { font-size: 1rem; letter-spacing: .3px; }
+
+    /* ---- generic card (legacy class, now theme-aware) ---- */
     .metric-card {
-        background-color: #f0f2f6;
-        padding: 20px;
-        border-radius: 10px;
-        margin: 10px 0;
+        background: rgba(128,150,180,.07);
+        border: 1px solid rgba(128,150,180,.18);
+        padding: 1.1rem; border-radius: 12px; margin: .6rem 0;
     }
     </style>
     """, unsafe_allow_html=True)
@@ -166,13 +234,29 @@ def connect_to_robinhood(username: str, password: str, mfa_code: str = None) -> 
 
 
 def get_snaptrade():
-    """Return the SnapTrade connector, or None if it isn't configured."""
+    """Return (connector, status).
+
+    status is "ok", "sdk_missing", or "keys_missing" so the UI can say what is
+    actually wrong instead of always blaming missing keys.
+    """
     try:
-        from snaptrade_connector import SnapTradeConnector
+        from snaptrade_connector import SnapTradeConnector, SNAPTRADE_SDK_AVAILABLE
     except ImportError:
-        return None
-    connector = SnapTradeConnector()
-    return connector if connector.is_configured else None
+        return None, "sdk_missing"
+
+    if not SNAPTRADE_SDK_AVAILABLE:
+        return None, "sdk_missing"
+
+    client_id = get_config("SNAPTRADE_CLIENT_ID")
+    consumer_key = get_config("SNAPTRADE_CONSUMER_KEY")
+    if not (client_id and consumer_key):
+        return None, "keys_missing"
+
+    return SnapTradeConnector(
+        client_id=client_id,
+        consumer_key=consumer_key,
+        auth_mode=get_config("SNAPTRADE_AUTH_MODE"),
+    ), "ok"
 
 
 def load_snaptrade_portfolio(connector, user_id: str, user_secret: str) -> bool:
@@ -565,8 +649,16 @@ def analyze_sp500(num_stocks: int = 10, progress_callback=None):
 # ==================== UI ====================
 
 # Header
-st.title("📈 AI Stock Analyzer")
-st.markdown("*Powered by GenAI for intelligent stock recommendations*")
+st.markdown(
+    """
+    <div class="hero">
+      <h1>📈 <span class="grad">AI Stock Analyzer</span></h1>
+      <p>XGBoost signals, retrieval-augmented context, and natural-language reasoning
+         for your portfolio.</p>
+    </div>
+    """,
+    unsafe_allow_html=True,
+)
 
 # Sidebar for Settings and Configuration
 with st.sidebar:
@@ -593,7 +685,7 @@ with st.sidebar:
         
         # Show login form or connect button
         if DEMO_MODE:
-            connector = get_snaptrade()
+            connector, status = get_snaptrade()
             if connector:
                 render_secure_connect(connector)
                 st.divider()
@@ -601,14 +693,19 @@ with st.sidebar:
                     if load_demo_portfolio():
                         st.rerun()
             else:
-                st.info("🎭 Demo deployment — live brokerage login is disabled.")
                 if st.button("🎭 Load Demo Portfolio", type="primary", use_container_width=True):
                     if load_demo_portfolio():
                         st.rerun()
-                st.caption(
-                    "Set SNAPTRADE_CLIENT_ID and SNAPTRADE_CONSUMER_KEY to let visitors "
-                    "securely connect a real brokerage account."
-                )
+                if status == "sdk_missing":
+                    st.caption(
+                        "⚠️ snaptrade-python-sdk is not installed, so secure account "
+                        "connection is unavailable. Check the deployment build log."
+                    )
+                else:
+                    st.caption(
+                        "Add SNAPTRADE_CLIENT_ID and SNAPTRADE_CONSUMER_KEY to your "
+                        "secrets to connect a real brokerage account."
+                    )
         elif st.session_state.show_login_form:
             st.markdown("### 🔐 Robinhood Login")
             
@@ -722,7 +819,25 @@ with tab1:
         analyze_button = st.button("🔎 Analyze Stock", type="primary", use_container_width=True)
     
     # AI availability check (no status banner shown)
-    
+
+    # Empty state: explain the pipeline until an analysis has been run
+    if not analyze_button:
+        st.write("")
+        _features = [
+            ("📊", "Technical features",
+             "Moving averages, returns, volatility and trend signals derived from years of price history."),
+            ("🤖", "XGBoost signal",
+             "A gradient-boosted classifier scores each ticker BUY, SELL or HOLD with a confidence value."),
+            ("🧠", "Plain-English reasoning",
+             "Retrieved market context feeds an LLM, so every call arrives with an explanation, not just a number."),
+        ]
+        for col, (icon, title, body) in zip(st.columns(3), _features):
+            with col:
+                st.markdown(
+                    f"<div class='feat'><h4>{icon} {title}</h4><p>{body}</p></div>",
+                    unsafe_allow_html=True,
+                )
+
     if analyze_button and stock_symbol:
         with st.spinner(f"Analyzing {stock_symbol}... 🤖"):
             result = analyze_individual_stock(stock_symbol)
