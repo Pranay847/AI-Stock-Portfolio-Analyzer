@@ -103,15 +103,35 @@ class SnapTradeConnector:
             )
         return self._client
 
+    @property
+    def is_personal(self) -> bool:
+        """True for a personal key, which represents the key owner directly."""
+        return self.auth_mode.startswith("personal")
+
+    def _user_kwargs(self, user_id: Optional[str], user_secret: Optional[str]) -> dict:
+        """Per-user credentials, omitted entirely for personal keys.
+
+        A personal key resolves the user from the key itself and rejects
+        userId/userSecret, so they must not be sent.
+        """
+        if self.is_personal:
+            return {}
+        return {"user_id": user_id, "user_secret": user_secret}
+
     # ---------------- user registration ----------------
 
     def register_user(self, user_id: Optional[str] = None) -> tuple[str, str]:
-        """Register an end user with SnapTrade.
+        """Register an end user with SnapTrade (commercial keys only).
 
         Returns:
             (user_id, user_secret) - the secret is the credential for later
             reads and should be held only for the length of the session.
         """
+        if self.is_personal:
+            raise RuntimeError(
+                "Personal API keys represent you directly and cannot register "
+                "users. Use start_connection() instead."
+            )
         user_id = user_id or f"user-{uuid.uuid4()}"
         resp = self.client.authentication.register_snap_trade_user(user_id=user_id)
         body = _body(resp)
@@ -120,12 +140,30 @@ class SnapTradeConnector:
             raise RuntimeError("SnapTrade did not return a userSecret")
         return user_id, str(user_secret)
 
+    def start_connection(
+        self, redirect_uri: Optional[str] = None, broker: str = "ROBINHOOD"
+    ) -> tuple[Optional[str], Optional[str], str]:
+        """Begin a brokerage connection.
+
+        Returns:
+            (user_id, user_secret, connection_url). For a personal key the two
+            ids are None, since the key itself identifies the user.
+        """
+        if self.is_personal:
+            user_id = user_secret = None
+        else:
+            user_id, user_secret = self.register_user()
+        url = self.get_connection_url(
+            user_id, user_secret, redirect_uri=redirect_uri, broker=broker
+        )
+        return user_id, user_secret, url
+
     # ---------------- connection portal ----------------
 
     def get_connection_url(
         self,
-        user_id: str,
-        user_secret: str,
+        user_id: Optional[str] = None,
+        user_secret: Optional[str] = None,
         redirect_uri: Optional[str] = None,
         broker: str = "ROBINHOOD",
     ) -> str:
@@ -133,7 +171,7 @@ class SnapTradeConnector:
 
         The user logs into their brokerage on that page, not in this app.
         """
-        kwargs = {"user_id": user_id, "user_secret": user_secret}
+        kwargs = self._user_kwargs(user_id, user_secret)
         if broker:
             kwargs["broker"] = broker
         if redirect_uri:
@@ -148,10 +186,12 @@ class SnapTradeConnector:
 
     # ---------------- reading the portfolio ----------------
 
-    def list_accounts(self, user_id: str, user_secret: str) -> list[dict]:
+    def list_accounts(
+        self, user_id: Optional[str] = None, user_secret: Optional[str] = None
+    ) -> list[dict]:
         """List the brokerage accounts the user has connected."""
         resp = self.client.account_information.list_user_accounts(
-            user_id=user_id, user_secret=user_secret
+            **self._user_kwargs(user_id, user_secret)
         )
         accounts = _body(resp) or []
         return [
@@ -164,7 +204,10 @@ class SnapTradeConnector:
         ]
 
     def fetch_positions(
-        self, user_id: str, user_secret: str, account_id: Optional[str] = None
+        self,
+        user_id: Optional[str] = None,
+        user_secret: Optional[str] = None,
+        account_id: Optional[str] = None,
     ) -> list[dict]:
         """Fetch holdings, normalised to the app's position shape.
 
@@ -181,7 +224,7 @@ class SnapTradeConnector:
             if not acct_id:
                 continue
             resp = self.client.account_information.get_all_account_positions(
-                account_id=acct_id, user_id=user_id, user_secret=user_secret
+                account_id=acct_id, **self._user_kwargs(user_id, user_secret)
             )
             for position in (_body(resp) or []):
                 normalised = self._normalise_position(position)

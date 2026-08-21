@@ -259,7 +259,7 @@ def get_snaptrade():
     ), "ok"
 
 
-def load_snaptrade_portfolio(connector, user_id: str, user_secret: str) -> bool:
+def load_snaptrade_portfolio(connector, user_id=None, user_secret=None) -> bool:
     """Load holdings from the user's connected brokerage account."""
     from snaptrade_connector import summarize_portfolio
     try:
@@ -282,13 +282,15 @@ def render_secure_connect(connector):
     if str(getattr(connector, "auth_mode", "")).startswith("personal"):
         st.caption("🔑 Personal SnapTrade key: connects this app owner's own account.")
 
-    if not st.session_state.get("snaptrade_user_id"):
+    if not st.session_state.get("snaptrade_url"):
         if st.button("🔗 Connect Robinhood", type="primary", use_container_width=True):
             try:
-                user_id, user_secret = connector.register_user()
+                # Personal keys identify the user themselves, so this skips
+                # registration and returns None ids.
+                user_id, user_secret, url = connector.start_connection()
                 st.session_state.snaptrade_user_id = user_id
                 st.session_state.snaptrade_user_secret = user_secret
-                st.session_state.snaptrade_url = connector.get_connection_url(user_id, user_secret)
+                st.session_state.snaptrade_url = url
                 st.rerun()
             except Exception as e:
                 st.error(f"Could not start secure connection: {e}")
@@ -304,8 +306,8 @@ def render_secure_connect(connector):
         if st.button("✅ I've connected — load my stocks", use_container_width=True):
             if load_snaptrade_portfolio(
                 connector,
-                st.session_state.snaptrade_user_id,
-                st.session_state.snaptrade_user_secret,
+                st.session_state.get("snaptrade_user_id"),
+                st.session_state.get("snaptrade_user_secret"),
             ):
                 st.rerun()
 
