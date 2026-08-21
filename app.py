@@ -195,6 +195,8 @@ def load_snaptrade_portfolio(connector, user_id: str, user_secret: str) -> bool:
 def render_secure_connect(connector):
     """Render the SnapTrade connection flow (no credentials touch this app)."""
     st.caption("🔒 You log in on Robinhood's own page — this app never sees your password.")
+    if str(getattr(connector, "auth_mode", "")).startswith("personal"):
+        st.caption("🔑 Personal SnapTrade key: connects this app owner's own account.")
 
     if not st.session_state.get("snaptrade_user_id"):
         if st.button("🔗 Connect Robinhood", type="primary", use_container_width=True):

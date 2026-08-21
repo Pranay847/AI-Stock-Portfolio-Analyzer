@@ -68,10 +68,12 @@ class SnapTradeConnector:
     ):
         self.client_id = client_id or os.getenv("SNAPTRADE_CLIENT_ID")
         self.consumer_key = consumer_key or os.getenv("SNAPTRADE_CONSUMER_KEY")
-        # "commercial" (build for end users) or "personal" (free key, your own
-        # accounts only). See https://docs.snaptrade.com/docs/personal-vs-commercial
+        # "personal" (free key, your own accounts only) or "commercial" (paid,
+        # lets any end user connect their own account). Defaults to personal so
+        # the free key works out of the box.
+        # See https://docs.snaptrade.com/docs/personal-vs-commercial
         self.auth_mode = (
-            auth_mode or os.getenv("SNAPTRADE_AUTH_MODE", "commercial")
+            auth_mode or os.getenv("SNAPTRADE_AUTH_MODE", "personal")
         ).strip().lower()
         self._client = None
 
