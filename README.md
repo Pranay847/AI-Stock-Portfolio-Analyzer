@@ -81,9 +81,18 @@ streamlit run app.py
 
 Set any required API keys in `.env` before running provider-specific data or LLM workflows.
 
-The app starts in **demo mode**, which hides the brokerage login and uses mock portfolio
-data, so a hosted deployment never collects real credentials. To connect a real Robinhood
-account when running locally, set `DEMO_MODE=false` in `.env`.
+The app starts in **demo mode**, which hides the direct brokerage login and uses mock
+portfolio data, so a hosted deployment never collects real credentials. To use the direct
+Robinhood login form when running locally, set `DEMO_MODE=false` in `.env`.
+
+### Connecting a real account safely
+
+Set `SNAPTRADE_CLIENT_ID` and `SNAPTRADE_CONSUMER_KEY` (free keys from
+[SnapTrade](https://snaptrade.com)) and visitors can connect their own Robinhood account
+from the deployed app. The user authenticates on SnapTrade's hosted portal, so this app
+never receives a password — it holds only a session-scoped access pair used to read
+positions. This is the recommended path for any public deployment, since Robinhood has no
+official OAuth and `robin_stocks` requires the account password directly.
 
 LLM explanations resolve their backend automatically: OpenAI when `OPENAI_API_KEY` is set,
 otherwise local Ollama. If neither is reachable, the app still runs and shows the XGBoost

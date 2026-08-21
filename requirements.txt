@@ -35,3 +35,6 @@ robin-stocks>=3.0.0
 
 
 
+
+# Secure brokerage account connection (OAuth via SnapTrade)
+snaptrade-python-sdk>=13.0.0

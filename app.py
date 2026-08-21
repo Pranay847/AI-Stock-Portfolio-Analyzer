@@ -165,6 +165,70 @@ def connect_to_robinhood(username: str, password: str, mfa_code: str = None) -> 
         return False
 
 
+def get_snaptrade():
+    """Return the SnapTrade connector, or None if it isn't configured."""
+    try:
+        from snaptrade_connector import SnapTradeConnector
+    except ImportError:
+        return None
+    connector = SnapTradeConnector()
+    return connector if connector.is_configured else None
+
+
+def load_snaptrade_portfolio(connector, user_id: str, user_secret: str) -> bool:
+    """Load holdings from the user's connected brokerage account."""
+    from snaptrade_connector import summarize_portfolio
+    try:
+        positions = connector.fetch_positions(user_id, user_secret)
+        if not positions:
+            st.warning("No stock positions found. Finish connecting your account, then retry.")
+            return False
+        st.session_state.portfolio_data = positions
+        st.session_state.portfolio_summary = summarize_portfolio(positions)
+        st.session_state.robinhood_connected = True
+        return True
+    except Exception as e:
+        st.error(f"Could not load holdings: {e}")
+        return False
+
+
+def render_secure_connect(connector):
+    """Render the SnapTrade connection flow (no credentials touch this app)."""
+    st.caption("🔒 You log in on Robinhood's own page — this app never sees your password.")
+
+    if not st.session_state.get("snaptrade_user_id"):
+        if st.button("🔗 Connect Robinhood", type="primary", use_container_width=True):
+            try:
+                user_id, user_secret = connector.register_user()
+                st.session_state.snaptrade_user_id = user_id
+                st.session_state.snaptrade_user_secret = user_secret
+                st.session_state.snaptrade_url = connector.get_connection_url(user_id, user_secret)
+                st.rerun()
+            except Exception as e:
+                st.error(f"Could not start secure connection: {e}")
+    else:
+        if st.session_state.get("snaptrade_url"):
+            st.link_button(
+                "🔓 Open secure login",
+                st.session_state.snaptrade_url,
+                use_container_width=True,
+            )
+            st.caption("Opens SnapTrade's portal. Come back here when you're done.")
+
+        if st.button("✅ I've connected — load my stocks", use_container_width=True):
+            if load_snaptrade_portfolio(
+                connector,
+                st.session_state.snaptrade_user_id,
+                st.session_state.snaptrade_user_secret,
+            ):
+                st.rerun()
+
+        if st.button("Cancel", use_container_width=True):
+            for key in ("snaptrade_user_id", "snaptrade_user_secret", "snaptrade_url"):
+                st.session_state.pop(key, None)
+            st.rerun()
+
+
 def load_demo_portfolio() -> bool:
     """Load the mock portfolio used for demo deployments."""
     from robinhood_portfolio_analyzer import demo_with_mock_data
@@ -527,11 +591,22 @@ with st.sidebar:
         
         # Show login form or connect button
         if DEMO_MODE:
-            st.info("🎭 Demo deployment — live brokerage login is disabled.")
-            if st.button("🎭 Load Demo Portfolio", type="primary", use_container_width=True):
-                if load_demo_portfolio():
-                    st.rerun()
-            st.caption("Run locally with DEMO_MODE=false to connect a real account.")
+            connector = get_snaptrade()
+            if connector:
+                render_secure_connect(connector)
+                st.divider()
+                if st.button("🎭 Or try demo data", use_container_width=True):
+                    if load_demo_portfolio():
+                        st.rerun()
+            else:
+                st.info("🎭 Demo deployment — live brokerage login is disabled.")
+                if st.button("🎭 Load Demo Portfolio", type="primary", use_container_width=True):
+                    if load_demo_portfolio():
+                        st.rerun()
+                st.caption(
+                    "Set SNAPTRADE_CLIENT_ID and SNAPTRADE_CONSUMER_KEY to let visitors "
+                    "securely connect a real brokerage account."
+                )
         elif st.session_state.show_login_form:
             st.markdown("### 🔐 Robinhood Login")
             
