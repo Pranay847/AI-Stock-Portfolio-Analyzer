@@ -2,11 +2,14 @@
 LLM Reasoning via LangChain.
 
 Replaces raw ollama.chat() calls with LangChain chains for structured,
-reproducible LLM reasoning. Uses ChatOllama by default (local Mistral),
-but can be swapped to ChatOpenAI trivially.
+reproducible LLM reasoning. The backend is resolved at call time: OpenAI when
+OPENAI_API_KEY is set, otherwise local Ollama (Mistral). When neither is
+reachable — e.g. a hosted deployment with no local Ollama daemon — reasoning
+degrades to the model signal instead of raising.
 """
 
 import json
+import os
 import re
 from typing import Optional
 
@@ -16,6 +19,26 @@ from agents.prompts import ANALYSIS_SYSTEM_PROMPT, ANALYSIS_USER_PROMPT
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+def _resolve_backend(provider: str = "auto", model: Optional[str] = None):
+    """Resolve which LLM backend to use.
+
+    "auto" picks OpenAI when OPENAI_API_KEY is present (the usual case for a
+    hosted deployment) and falls back to local Ollama otherwise.
+
+    Args:
+        provider: "auto", "ollama", or "openai"
+        model: Model name, or None to use the provider's default
+
+    Returns:
+        Tuple of (provider, model)
+    """
+    if provider == "auto":
+        provider = "openai" if os.getenv("OPENAI_API_KEY") else "ollama"
+    if model is None:
+        model = "gpt-4o-mini" if provider == "openai" else "mistral"
+    return provider, model
+
 
 def _get_llm(provider: str = "ollama", model: str = "mistral", temperature: float = 0.2):
     """Return a LangChain chat model instance.
@@ -67,18 +90,22 @@ def generate_rationale(
     xgboost_signal: str,
     xgboost_confidence: float,
     rag_context: str,
-    provider: str = "ollama",
-    model: str = "mistral",
+    provider: str = "auto",
+    model: Optional[str] = None,
 ) -> dict:
     """Generate a structured stock analysis using LangChain + LLM.
 
     Returns:
         dict with keys: recommendation, confidence, summary, reasons, risks
-        Falls back to a basic dict on failure.
+        Falls back to the raw model signal when no LLM backend is reachable.
     """
-    from langchain_core.messages import SystemMessage, HumanMessage
+    provider, model = _resolve_backend(provider, model)
 
-    llm = _get_llm(provider=provider, model=model)
+    try:
+        from langchain_core.messages import SystemMessage, HumanMessage
+        llm = _get_llm(provider=provider, model=model)
+    except Exception as e:
+        return _model_only_result(xgboost_signal, xgboost_confidence, e)
 
     user_content = ANALYSIS_USER_PROMPT.format(
         ticker=ticker,
@@ -116,15 +143,35 @@ def generate_rationale(
         return _fallback_from_text(content, ticker)
 
     except Exception as e:
-        return {
-            "recommendation": "HOLD",
-            "confidence": 30,
-            "summary": f"LLM reasoning unavailable: {str(e)}",
-            "reasons": ["LLM service may be offline", "Using fallback assessment"],
-            "risks": ["Analysis may be incomplete without LLM reasoning"],
-            "analysis_type": "llm_error",
-            "error": str(e),
-        }
+        return _model_only_result(xgboost_signal, xgboost_confidence, e)
+
+
+def _model_only_result(xgboost_signal: str, xgboost_confidence: float, error: Exception) -> dict:
+    """Result used when no LLM backend is reachable.
+
+    Surfaces the XGBoost signal on its own rather than failing the analysis, so
+    a deployment without an LLM still shows the model's prediction.
+    """
+    rec = (xgboost_signal or "HOLD").upper().strip()
+    if rec not in ("BUY", "SELL", "HOLD"):
+        rec = "HOLD"
+
+    confidence = xgboost_confidence or 0
+    if 0 < confidence <= 1:
+        confidence *= 100
+
+    return {
+        "recommendation": rec,
+        "confidence": int(confidence) or 30,
+        "summary": (
+            "Model signal only — no LLM backend is configured, so the numeric "
+            "prediction is shown without a narrative explanation."
+        ),
+        "reasons": [f"XGBoost signal: {rec}"],
+        "risks": ["Explanation layer unavailable; the signal is not interpreted."],
+        "analysis_type": "model_only",
+        "error": str(error),
+    }
 
 
 def _fallback_from_text(text: str, ticker: str) -> dict:
@@ -151,9 +198,10 @@ def _fallback_from_text(text: str, ticker: str) -> dict:
 # Quick check utility
 # ---------------------------------------------------------------------------
 
-def check_llm_available(provider: str = "ollama", model: str = "mistral") -> bool:
+def check_llm_available(provider: str = "auto", model: Optional[str] = None) -> bool:
     """Check whether the LLM backend is reachable."""
     try:
+        provider, model = _resolve_backend(provider, model)
         llm = _get_llm(provider=provider, model=model)
         from langchain_core.messages import HumanMessage
         resp = llm.invoke([HumanMessage(content="Say OK")])

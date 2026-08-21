@@ -1,7 +1,13 @@
+import os
 import streamlit as st
 import pandas as pd
 import time
 from datetime import datetime
+
+# Demo mode hides the brokerage login and uses mock data instead. It defaults to
+# on so public deployments never collect real credentials; set DEMO_MODE=false
+# in a local .env to connect a real Robinhood account.
+DEMO_MODE = os.getenv("DEMO_MODE", "true").strip().lower() not in ("false", "0", "no")
 
 # Company name to ticker symbol mapping
 COMPANY_TO_TICKER = {
@@ -156,6 +162,22 @@ def connect_to_robinhood(username: str, password: str, mfa_code: str = None) -> 
         return False
     except Exception as e:
         st.error(f"Connection error: {e}")
+        return False
+
+
+def load_demo_portfolio() -> bool:
+    """Load the mock portfolio used for demo deployments."""
+    from robinhood_portfolio_analyzer import demo_with_mock_data
+    try:
+        analyzer, results = demo_with_mock_data()
+        st.session_state.analyzer = analyzer
+        st.session_state.portfolio_data = analyzer.portfolio
+        st.session_state.portfolio_analysis = results
+        st.session_state.portfolio_summary = analyzer.get_portfolio_summary()
+        st.session_state.robinhood_connected = True
+        return True
+    except Exception as e:
+        st.error(f"Demo mode error: {e}")
         return False
 
 
@@ -504,7 +526,13 @@ with st.sidebar:
         st.warning("⚠️ Not Connected")
         
         # Show login form or connect button
-        if st.session_state.show_login_form:
+        if DEMO_MODE:
+            st.info("🎭 Demo deployment — live brokerage login is disabled.")
+            if st.button("🎭 Load Demo Portfolio", type="primary", use_container_width=True):
+                if load_demo_portfolio():
+                    st.rerun()
+            st.caption("Run locally with DEMO_MODE=false to connect a real account.")
+        elif st.session_state.show_login_form:
             st.markdown("### 🔐 Robinhood Login")
             
             with st.form("robinhood_login"):
@@ -719,23 +747,16 @@ with tab2:
     st.markdown("Analyze all stocks in your Robinhood portfolio")
     
     if not st.session_state.robinhood_connected:
-        st.warning("⚠️ Connect to Robinhood to analyze your portfolio")
-        st.info("👈 Click 'Connect to Robinhood' in the sidebar to get started")
-        
+        if DEMO_MODE:
+            st.info("👈 Load the demo portfolio from the sidebar to explore the analysis view")
+        else:
+            st.warning("⚠️ Connect to Robinhood to analyze your portfolio")
+            st.info("👈 Click 'Connect to Robinhood' in the sidebar to get started")
+
         # Demo mode option
         if st.button("🎭 Try Demo Mode"):
-            # Load mock portfolio for demo
-            from robinhood_portfolio_analyzer import demo_with_mock_data
-            try:
-                analyzer, results = demo_with_mock_data()
-                st.session_state.analyzer = analyzer
-                st.session_state.portfolio_data = analyzer.portfolio
-                st.session_state.portfolio_analysis = results
-                st.session_state.portfolio_summary = analyzer.get_portfolio_summary()
-                st.session_state.robinhood_connected = True
+            if load_demo_portfolio():
                 st.rerun()
-            except Exception as e:
-                st.error(f"Demo mode error: {e}")
     else:
         # Show portfolio data
         if st.session_state.portfolio_summary:

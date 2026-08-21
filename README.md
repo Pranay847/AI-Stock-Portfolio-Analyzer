@@ -81,6 +81,14 @@ streamlit run app.py
 
 Set any required API keys in `.env` before running provider-specific data or LLM workflows.
 
+The app starts in **demo mode**, which hides the brokerage login and uses mock portfolio
+data, so a hosted deployment never collects real credentials. To connect a real Robinhood
+account when running locally, set `DEMO_MODE=false` in `.env`.
+
+LLM explanations resolve their backend automatically: OpenAI when `OPENAI_API_KEY` is set,
+otherwise local Ollama. If neither is reachable, the app still runs and shows the XGBoost
+signal without the narrative explanation.
+
 ## Performance
 
 The multi-stock retrieval pipeline was optimized with concurrent fetching, batched
