@@ -278,6 +278,16 @@ def load_snaptrade_portfolio(connector, user_id=None, user_secret=None) -> bool:
             return False
         st.session_state.portfolio_data = positions
         st.session_state.portfolio_summary = summarize_portfolio(positions)
+
+        # Wire up an analyzer over these holdings. analyze_portfolio() and
+        # get_analysis_report() read analyzer.portfolio, so without this
+        # "Analyze with AI" and "Export Full Report" are silent no-ops for
+        # accounts loaded through SnapTrade.
+        analyzer = get_analyzer()
+        if analyzer is not None:
+            analyzer.portfolio = positions
+            st.session_state.analyzer = analyzer
+
         st.session_state.robinhood_connected = True
         return True
     except Exception as e:
@@ -355,6 +365,11 @@ def disconnect_from_robinhood():
     st.session_state.portfolio_analysis = []
     st.session_state.portfolio_summary = None
     st.session_state.show_login_form = False
+    # Clear the SnapTrade handshake too. The portal URL is single-use, so
+    # leaving it behind would strand the sidebar on a dead link with the
+    # Connect button hidden.
+    for _key in ("snaptrade_url", "snaptrade_user_id", "snaptrade_user_secret"):
+        st.session_state.pop(_key, None)
 
 
 def analyze_individual_stock(symbol: str) -> dict:
