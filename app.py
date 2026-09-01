@@ -4,6 +4,15 @@ import pandas as pd
 import time
 from datetime import datetime
 
+# Load .env before any config is read. Other modules call load_dotenv() lazily
+# on import, which would otherwise leave local config invisible on first render
+# and then change it mid-session.
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass
+
 def get_config(name: str, default: str = None):
     """Read config from Streamlit secrets first, then the environment.
 

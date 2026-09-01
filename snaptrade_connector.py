@@ -72,9 +72,10 @@ class SnapTradeConnector:
         # lets any end user connect their own account). Defaults to personal so
         # the free key works out of the box.
         # See https://docs.snaptrade.com/docs/personal-vs-commercial
-        self.auth_mode = (
-            auth_mode or os.getenv("SNAPTRADE_AUTH_MODE", "personal")
-        ).strip().lower()
+        # A blank or whitespace-only value must not fall through to commercial:
+        # that would send userId/userSecret with a personal key and 403.
+        _mode = (auth_mode or os.getenv("SNAPTRADE_AUTH_MODE") or "").strip().lower()
+        self.auth_mode = _mode or "personal"
         self._client = None
 
     @property
@@ -226,7 +227,12 @@ class SnapTradeConnector:
             resp = self.client.account_information.get_all_account_positions(
                 account_id=acct_id, **self._user_kwargs(user_id, user_secret)
             )
-            for position in (_body(resp) or []):
+            # /positions/all returns {"results": [...], "data_freshness": {...}},
+            # not a bare list. The legacy /holdings endpoint does return a list,
+            # so both shapes are accepted.
+            body = _body(resp)
+            rows = body if isinstance(body, list) else (_get(body, "results", default=[]) or [])
+            for position in rows:
                 normalised = self._normalise_position(position)
                 if normalised:
                     portfolio.append(normalised)
@@ -235,9 +241,14 @@ class SnapTradeConnector:
     @staticmethod
     def _normalise_position(position) -> Optional[dict]:
         """Map a SnapTrade position onto the app's position dict."""
+        # /positions/all returns AccountPosition, whose ticker lives on the
+        # nested instrument. The symbol.* paths are the legacy /holdings
+        # Position shape, kept as fallbacks.
         symbol = _get(
             position,
-            "symbol.symbol.symbol",     # universal symbol, the usual shape
+            "instrument.symbol",
+            "instrument.raw_symbol",
+            "symbol.symbol.symbol",
             "symbol.symbol",
             "symbol.raw_symbol",
             "symbol",
@@ -247,25 +258,31 @@ class SnapTradeConnector:
 
         name = _get(
             position,
+            "instrument.description",
             "symbol.symbol.description",
             "symbol.description",
             default=symbol,
         )
 
+        # AccountPosition sends these as strings; _to_float handles that.
         quantity = _to_float(_get(position, "units", "quantity"))
         current_price = _to_float(_get(position, "price", "last_price"))
+        # cost_basis is the per-share average purchase price on AccountPosition.
         avg_buy_price = _to_float(
-            _get(position, "average_purchase_price", "averagePurchasePrice")
+            _get(position, "cost_basis", "average_purchase_price", "averagePurchasePrice")
         )
 
         equity = quantity * current_price
         cost_basis = quantity * avg_buy_price
         profit_loss = equity - cost_basis
-        profit_loss_pct = (
-            ((current_price - avg_buy_price) / avg_buy_price * 100)
-            if avg_buy_price > 0
-            else 0.0
-        )
+        # A missing price would otherwise read as a 100% loss, so P/L is only
+        # computed when both sides are known.
+        if avg_buy_price > 0 and current_price > 0:
+            profit_loss_pct = (current_price - avg_buy_price) / avg_buy_price * 100
+        else:
+            profit_loss_pct = 0.0
+            if current_price <= 0:
+                profit_loss = 0.0
 
         return {
             "symbol": symbol,
