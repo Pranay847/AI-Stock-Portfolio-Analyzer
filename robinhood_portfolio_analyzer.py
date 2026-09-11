@@ -461,10 +461,10 @@ Profit/Loss: ${position['profit_loss']:.2f} ({position['profit_loss_percent']:.2
         else:
             result = self._ollama_fallback(position, context)
 
-        # A failed LLM call still returns a well-formed dict tagged llm_error.
-        # Fall back to the deterministic rules rather than presenting the error
-        # string to the user as a real recommendation.
-        if result.get('analysis_type') == 'llm_error':
+        # With no LLM reachable, reasoning degrades to a model-only result. That
+        # still carries the XGBoost prediction when there is one; without a model
+        # it is just a bare HOLD, so prefer the deterministic position rules.
+        if result.get('analysis_type') == 'model_only' and not xgb_signal:
             result = self._rule_based_analysis(position)
 
         result['symbol'] = ticker

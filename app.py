@@ -453,10 +453,15 @@ def analyze_individual_stock(symbol: str) -> dict:
                     f"Price: ${current_price:.2f} | Change: {change_percent:.2f}%"
                 )
                 analysis = run_analysis(symbol, portfolio_status=portfolio_status)
-                # An unreachable LLM still returns a well-formed dict tagged
-                # llm_error. Treat that as a failure so we fall back to the
-                # analyzer instead of surfacing a fabricated HOLD.
-                if not analysis.get("recommendation") or analysis.get("analysis_type") == "llm_error":
+                # With no LLM reachable, reasoning degrades to a model-only
+                # result. That is worth showing when XGBoost actually predicted
+                # something, but a bare HOLD with no model behind it carries no
+                # information -- fall through to the analyzer in that case.
+                model_only_without_signal = (
+                    analysis.get("analysis_type") == "model_only"
+                    and analysis.get("xgboost_signal") not in ("BUY", "SELL", "HOLD")
+                )
+                if not analysis.get("recommendation") or model_only_without_signal:
                     raise ValueError("langgraph produced no usable result")
             except Exception:
                 analysis = analyzer.analyze_stock(symbol, position)
@@ -469,6 +474,19 @@ def analyze_individual_stock(symbol: str) -> dict:
                         f'Unknown company or ticker: {original_input}',
                         'Try using the exact ticker symbol (e.g., MSFT, AAPL)',
                         'Or check the spelling of the company name'
+                    ]
+                elif analyzer.vector_db is None:
+                    # The market-data client failed to initialise, which in
+                    # practice means ALPHA_VANTAGE_API_KEY is missing. Say so:
+                    # the old message blamed rate limits and sent people looking
+                    # for a broken API when nothing had been called at all.
+                    error_msg = 'Market data is not configured, so no quote could be requested.'
+                    reasons = [
+                        'ALPHA_VANTAGE_API_KEY is not set for this deployment',
+                        'On Streamlit Cloud: Settings -> Secrets, add '
+                        'ALPHA_VANTAGE_API_KEY = "your_key"',
+                        'Locally: add it to your .env file',
+                        'Get a free key at https://www.alphavantage.co/support/#api-key'
                     ]
                 else:
                     error_msg = f'Unable to fetch market data for {symbol}.'
@@ -763,6 +781,17 @@ st.markdown(
 # Sidebar for Settings and Configuration
 with st.sidebar:
     st.header("⚙️ Settings")
+
+    # Surface a missing market-data key once, up front. Without it every ticker
+    # lookup fails with a generic "no data" message while the underlying cause
+    # (the key was never configured) is only visible in the server log.
+    if not get_config("ALPHA_VANTAGE_API_KEY"):
+        st.error(
+            "**Market data not configured.** Set `ALPHA_VANTAGE_API_KEY` in "
+            "Settings → Secrets (or your local `.env`). Ticker lookups cannot "
+            "work until it is set.",
+            icon="🔑",
+        )
     
     # Robinhood Connection
     st.subheader("🔌 Trading Platform")

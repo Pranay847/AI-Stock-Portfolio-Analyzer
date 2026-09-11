@@ -10,7 +10,9 @@ langchain-core>=1.0.0
 langchain-ollama>=1.0.0
 langchain-mistralai>=1.0.0
 langgraph>=1.2.0
-mcp>=1.0.0
+# mcp 2.x renamed FastMCP to MCPServer; mcp_server.py still uses the v1 API
+# (from mcp.server.fastmcp import FastMCP), so keep it on v1.
+mcp>=1.0.0,<2
 faiss-cpu>=1.12.0
 # xgboost declares nvidia-nccl-cu12 on Linux (~400 MB of NCCL for distributed
 # GPU training this app never does). xgboost-cpu is the same library and the
