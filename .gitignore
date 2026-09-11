@@ -8,6 +8,7 @@ env/
 __pycache__/
 *.py[cod]
 *.egg-info/
+.pytest_cache/
 
 # Secrets
 .env
@@ -19,3 +20,11 @@ _chroma_bench/
 
 # Streamlit local secrets
 .streamlit/secrets.toml
+
+# ChromaDB stores are regenerable caches and must not be committed. The copies
+# previously tracked here were written by an older chromadb than the one in
+# requirements.txt, which cannot read them (TypeError in _decode_seq_id).
+*_vector_db/
+my_stocks/
+test_db/
+logs/

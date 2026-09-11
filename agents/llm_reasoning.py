@@ -16,50 +16,83 @@ from typing import Optional
 from agents.prompts import ANALYSIS_SYSTEM_PROMPT, ANALYSIS_USER_PROMPT
 
 
+# Each provider needs its own default model name, since callers pass a single
+# `model` argument (or none at all).
+_DEFAULT_MODELS = {
+    "ollama": "mistral",
+    "mistral": "mistral-small-latest",
+    "openai": "gpt-4o-mini",
+}
+
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
+def hosted_llm_configured() -> bool:
+    """True when an API-key-based provider is available (needs no local server)."""
+    return bool(os.getenv("MISTRAL_API_KEY") or os.getenv("OPENAI_API_KEY"))
+
+
+def resolve_provider(provider: Optional[str] = None) -> str:
+    """Choose an LLM backend.
+
+    An explicit choice always wins. Otherwise prefer a hosted provider whenever
+    its API key is present: hosted deployments (Streamlit Cloud and friends)
+    cannot run a local Ollama server, so keying off the environment lets the
+    same code serve both local development and production.
+    """
+    if provider and provider != "auto":
+        return provider
+    if os.getenv("MISTRAL_API_KEY"):
+        return "mistral"
+    if os.getenv("OPENAI_API_KEY"):
+        return "openai"
+    return "ollama"
+
+
 def _resolve_backend(provider: str = "auto", model: Optional[str] = None):
     """Resolve which LLM backend to use.
 
-    "auto" picks OpenAI when OPENAI_API_KEY is present (the usual case for a
-    hosted deployment) and falls back to local Ollama otherwise.
-
     Args:
-        provider: "auto", "ollama", or "openai"
+        provider: "auto", "ollama", "mistral", or "openai"
         model: Model name, or None to use the provider's default
 
     Returns:
         Tuple of (provider, model)
     """
-    if provider == "auto":
-        provider = "openai" if os.getenv("OPENAI_API_KEY") else "ollama"
-    if model is None:
-        model = "gpt-4o-mini" if provider == "openai" else "mistral"
-    return provider, model
+    provider = resolve_provider(provider)
+    return provider, model or _DEFAULT_MODELS.get(provider, "mistral")
 
 
-def _get_llm(provider: str = "ollama", model: str = "mistral", temperature: float = 0.2):
+def _get_llm(provider: Optional[str] = None, model: Optional[str] = None,
+             temperature: float = 0.2):
     """Return a LangChain chat model instance.
 
     Args:
-        provider: "ollama" or "openai"
-        model: Model name (e.g. "mistral", "gpt-4o-mini")
+        provider: "ollama", "mistral" or "openai". None auto-detects.
+        model: Model name. None uses the provider's default.
         temperature: Sampling temperature
     """
+    provider = resolve_provider(provider)
+    model = model or _DEFAULT_MODELS.get(provider, "mistral")
+
+    if provider == "mistral":
+        from langchain_mistralai import ChatMistralAI
+        return ChatMistralAI(model=model, temperature=temperature)
+
     if provider == "openai":
         from langchain_openai import ChatOpenAI
         return ChatOpenAI(model=model, temperature=temperature)
-    else:
-        # Default: local Ollama
-        try:
-            from langchain_ollama import ChatOllama
-            return ChatOllama(model=model, temperature=temperature)
-        except ImportError:
-            # Fallback for older installs
-            from langchain_community.chat_models import ChatOllama
-            return ChatOllama(model=model, temperature=temperature)
+
+    # Default: local Ollama
+    try:
+        from langchain_ollama import ChatOllama
+        return ChatOllama(model=model, temperature=temperature)
+    except ImportError:
+        # Fallback for older installs
+        from langchain_community.chat_models import ChatOllama
+        return ChatOllama(model=model, temperature=temperature)
 
 
 def _parse_json_response(text: str) -> dict:
