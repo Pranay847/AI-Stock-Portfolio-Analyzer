@@ -42,26 +42,36 @@ class AnalysisState(TypedDict):
 # ---------------------------------------------------------------------------
 
 def fetch_data(state: AnalysisState) -> dict:
-    """Fetch historical OHLCV and real-time quote via MCP tools."""
+    """Fetch historical OHLCV, and a real-time quote if none was supplied.
+
+    Callers that already hold a fresh quote (app.py fetches one to drive the
+    price metrics before invoking the graph) pass it in via `quote_data`.
+    Re-fetching it here would spend a second provider call on every lookup --
+    halving how many analyses a rate-limited free tier allows -- and when that
+    second call fails the LLM is handed "Price: $0" and narrates the stock as
+    having invalid data, directly contradicting the price on screen.
+    """
     ticker = state["ticker"]
     historical_json = ""
-    quote_data = "No real-time quote available"
+    supplied_quote = (state.get("quote_data") or "").strip()
+    quote_data = supplied_quote or "No real-time quote available"
 
     try:
         from mcp_server import call_tool
         hist = call_tool("fetch_historical_data", ticker=ticker)
         historical_json = hist if isinstance(hist, str) else str(hist)
 
-        quote_raw = call_tool("fetch_quote", ticker=ticker)
-        if isinstance(quote_raw, dict):
-            price = quote_raw.get("price", 0)
-            change = quote_raw.get("change_percent", 0)
-            volume = quote_raw.get("volume", "N/A")
-            quote_data = (
-                f"Price: ${price} | Change: {change}% | Volume: {volume}"
-            )
-        elif isinstance(quote_raw, str):
-            quote_data = quote_raw
+        if not supplied_quote:
+            quote_raw = call_tool("fetch_quote", ticker=ticker)
+            if isinstance(quote_raw, dict):
+                price = quote_raw.get("price", 0)
+                change = quote_raw.get("change_percent", 0)
+                volume = quote_raw.get("volume", "N/A")
+                quote_data = (
+                    f"Price: ${price} | Change: {change}% | Volume: {volume}"
+                )
+            elif isinstance(quote_raw, str):
+                quote_data = quote_raw
     except Exception as e:
         print(f"   ⚠️  MCP fetch_data error for {ticker}: {e}")
 
@@ -110,14 +120,29 @@ def predict(state: AnalysisState) -> dict:
 # Node: retrieve_rag
 # ---------------------------------------------------------------------------
 
+# Vector DB shared with the caller. app.py already holds an initialised
+# AlphaVantageVectorDB (with a warm quote cache and its own store path); using
+# it here instead of building a second one avoids duplicate provider calls and
+# keeps both halves of the app reading the same store.
+_shared_vector_db = None
+
+
+def set_vector_db(db) -> None:
+    """Let the caller donate its vector DB to the graph. Optional."""
+    global _shared_vector_db
+    _shared_vector_db = db
+
+
 def retrieve_rag(state: AnalysisState) -> dict:
     """Retrieve semantic news + market context from Vector DB."""
     ticker = state["ticker"]
     rag_context = "No news context available"
 
     try:
-        from alpha_vantage_vector_db import AlphaVantageVectorDB
-        db = AlphaVantageVectorDB()
+        db = _shared_vector_db
+        if db is None:
+            from alpha_vantage_vector_db import AlphaVantageVectorDB
+            db = AlphaVantageVectorDB()
         ctx = db.get_stock_context(ticker)
         if ctx:
             rag_context = ctx
@@ -191,8 +216,16 @@ def build_graph() -> StateGraph:
 _graph = None
 
 
-def run_analysis(ticker: str, portfolio_status: str = "") -> dict:
-    """Entry point: run the full LangGraph analysis pipeline for one ticker."""
+def run_analysis(ticker: str, portfolio_status: str = "",
+                 quote_data: str = "") -> dict:
+    """Entry point: run the full LangGraph analysis pipeline for one ticker.
+
+    Args:
+        ticker: Symbol to analyze
+        portfolio_status: Human-readable ownership/P&L context
+        quote_data: A already-fetched quote summary. Supplying it skips the
+            graph's own quote fetch, saving a provider call per analysis.
+    """
     global _graph
     if _graph is None:
         _graph = build_graph()
@@ -201,7 +234,7 @@ def run_analysis(ticker: str, portfolio_status: str = "") -> dict:
         "ticker": ticker.upper().strip(),
         "portfolio_status": portfolio_status,
         "historical_json": "",
-        "quote_data": "",
+        "quote_data": quote_data,
         "xgboost_signal": "",
         "xgboost_confidence": 0.0,
         "rag_context": "",
