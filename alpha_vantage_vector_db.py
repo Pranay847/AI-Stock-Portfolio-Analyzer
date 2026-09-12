@@ -2,7 +2,7 @@ import os
 import requests
 import chromadb
 from chromadb.utils.embedding_functions import ONNXMiniLM_L6_V2
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import json
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -91,6 +91,65 @@ class AlphaVantageVectorDB:
 
     # ==================== DATA FETCHING ====================
 
+    def _fetch_quote_yahoo(self, symbol: str) -> Optional[dict]:
+        """Fetch a quote from Yahoo Finance, or None if unavailable.
+
+        Yahoo is unmetered and gives a live price while the market is open, so
+        it is preferred over Alpha Vantage for quotes. It is an unofficial
+        endpoint though, so every failure mode here is non-fatal -- the caller
+        falls back to Alpha Vantage.
+        """
+        try:
+            import yfinance as yf
+        except ImportError:
+            return None
+
+        try:
+            info = yf.Ticker(symbol).info or {}
+            price = info.get("regularMarketPrice") or info.get("currentPrice")
+            if not price:
+                return None
+
+            market_state = (info.get("marketState") or "").upper()
+            # Headline price is always the regular-session print. Pre/post
+            # market prices are deliberately ignored: they are thin, and the
+            # analysis targets below are derived from this number.
+            prev_close = (info.get("regularMarketPreviousClose")
+                          or info.get("previousClose") or 0)
+            change = price - prev_close if prev_close else 0
+            change_pct = (change / prev_close * 100) if prev_close else 0
+
+            traded_at = info.get("regularMarketTime")
+            if isinstance(traded_at, (int, float)):
+                trading_day = datetime.fromtimestamp(
+                    traded_at, tz=timezone.utc).date().isoformat()
+            else:
+                trading_day = ""
+
+            result = {
+                "symbol": info.get("symbol", symbol),
+                "price": float(price),
+                "open": float(info.get("regularMarketOpen") or info.get("open") or 0),
+                "high": float(info.get("regularMarketDayHigh") or info.get("dayHigh") or 0),
+                "low": float(info.get("regularMarketDayLow") or info.get("dayLow") or 0),
+                "volume": int(info.get("regularMarketVolume") or info.get("volume") or 0),
+                "previous_close": float(prev_close or 0),
+                "change": round(float(change), 4),
+                # stored as a bare string to match the Alpha Vantage shape,
+                # which callers parse with float()
+                "change_percent": f"{change_pct:.4f}",
+                "latest_trading_day": trading_day,
+                "timestamp": datetime.now().isoformat(),
+                "source": "yfinance",
+                "market_state": market_state,
+            }
+            live = " live" if market_state == "REGULAR" else ""
+            print(f"✅ Fetched quote for {symbol}: ${result['price']:.2f} (yahoo{live})")
+            return result
+        except Exception as e:
+            print(f"   ⚠️  Yahoo quote unavailable for {symbol}: {str(e)[:80]}")
+            return None
+
     def fetch_quote(self, symbol: str) -> Optional[dict]:
         """
         Fetch real-time quote data for a stock.
@@ -110,6 +169,16 @@ class AlphaVantageVectorDB:
         cached = self._cache_get(cache_key)
         if cached:
             return cached
+
+        # Try Yahoo first. Alpha Vantage's free GLOBAL_QUOTE only returns the
+        # last completed session's close, and spends one of 25 daily calls to
+        # do it. Yahoo gives an intraday price during market hours and is not
+        # metered, which leaves the whole Alpha Vantage budget for the overview
+        # and news that only it provides.
+        result = self._fetch_quote_yahoo(symbol)
+        if result:
+            self._cache_set(cache_key, result)
+            return result
 
         params = {
             "function": "GLOBAL_QUOTE",
@@ -140,10 +209,14 @@ class AlphaVantageVectorDB:
                 "change": float(quote.get("09. change", 0)),
                 "change_percent": quote.get("10. change percent", "0%").replace("%", ""),
                 "latest_trading_day": quote.get("07. latest trading day", ""),
-                "timestamp": datetime.now().isoformat()
+                "timestamp": datetime.now().isoformat(),
+                "source": "alphavantage",
+                # Alpha Vantage never returns an intraday price on the free
+                # tier, so this is always a completed session.
+                "market_state": "CLOSED",
             }
-            
-            print(f"✅ Fetched quote for {symbol}: ${result['price']:.2f}")
+
+            print(f"✅ Fetched quote for {symbol}: ${result['price']:.2f} (alpha vantage)")
             self._cache_set(cache_key, result)
             return result
 

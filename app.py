@@ -425,6 +425,8 @@ def analyze_individual_stock(symbol: str) -> dict:
             current_price = 0
             change_percent = 0
             as_of = ''
+            market_state = ''
+            quote_source = ''
 
             if analyzer.vector_db:
                 quote = analyzer.vector_db.fetch_quote(symbol)
@@ -435,6 +437,8 @@ def analyze_individual_stock(symbol: str) -> dict:
                     # not an intraday price. Carry the date through so the UI can
                     # say so rather than implying the number is live.
                     as_of = quote.get('latest_trading_day', '')
+                    market_state = quote.get('market_state', '')
+                    quote_source = quote.get('source', '')
             
             # Create position for analysis
             position = {
@@ -585,6 +589,8 @@ def analyze_individual_stock(symbol: str) -> dict:
                 'analysis_type': analysis_type,
                 'ai_model': ai_model_label,
                 'as_of': as_of,
+                'market_state': market_state,
+                'quote_source': quote_source,
             }
         except Exception as e:
             st.warning(f"AI analysis unavailable: {e}")
@@ -1038,7 +1044,9 @@ with tab1:
             # close, not an intraday price. Date it so the number is not read
             # as live and compared against a broker's ticker.
             as_of = result.get('as_of')
-            if as_of:
+            if result.get('market_state') == 'REGULAR':
+                st.caption("🟢 Live — market open")
+            elif as_of:
                 try:
                     pretty = datetime.strptime(as_of, "%Y-%m-%d").strftime("%b %d, %Y")
                 except (ValueError, TypeError):
