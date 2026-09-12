@@ -18,10 +18,25 @@ from agents.prompts import ANALYSIS_SYSTEM_PROMPT, ANALYSIS_USER_PROMPT
 
 # Each provider needs its own default model name, since callers pass a single
 # `model` argument (or none at all).
+#
+# The Mistral default is deliberately a small model: on the free tier anything
+# from mistral-small-latest upwards is refused with HTTP 429 and a
+# x-ratelimit-limit-req-minute of 0, i.e. no quota at all. ministral-3b-latest
+# is served there (750 req/min) and returns well-formed JSON for the analysis
+# prompt. Workspaces with access to the larger models can override per provider
+# via the environment -- see _MODEL_ENV_OVERRIDE.
 _DEFAULT_MODELS = {
     "ollama": "mistral",
-    "mistral": "mistral-small-latest",
+    "mistral": "ministral-3b-latest",
     "openai": "gpt-4o-mini",
+}
+
+# Per-provider model override, read at call time so it picks up values that
+# arrive after import (Streamlit secrets, .env).
+_MODEL_ENV_OVERRIDE = {
+    "ollama": "OLLAMA_MODEL",
+    "mistral": "MISTRAL_MODEL",
+    "openai": "OPENAI_MODEL",
 }
 
 
@@ -62,7 +77,11 @@ def _resolve_backend(provider: str = "auto", model: Optional[str] = None):
         Tuple of (provider, model)
     """
     provider = resolve_provider(provider)
-    return provider, model or _DEFAULT_MODELS.get(provider, "mistral")
+    if not model:
+        env_var = _MODEL_ENV_OVERRIDE.get(provider)
+        model = (os.getenv(env_var) if env_var else None) or \
+            _DEFAULT_MODELS.get(provider, "mistral")
+    return provider, model
 
 
 def _get_llm(provider: Optional[str] = None, model: Optional[str] = None,
