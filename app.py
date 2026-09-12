@@ -424,12 +424,17 @@ def analyze_individual_stock(symbol: str) -> dict:
             # Get stock quote only (1 API call instead of 2-3)
             current_price = 0
             change_percent = 0
-            
+            as_of = ''
+
             if analyzer.vector_db:
                 quote = analyzer.vector_db.fetch_quote(symbol)
                 if quote:
                     current_price = quote.get('price', 0)
                     change_percent = float(quote.get('change_percent', 0))
+                    # Alpha Vantage's free quote is the last *completed* session,
+                    # not an intraday price. Carry the date through so the UI can
+                    # say so rather than implying the number is live.
+                    as_of = quote.get('latest_trading_day', '')
             
             # Create position for analysis
             position = {
@@ -579,6 +584,7 @@ def analyze_individual_stock(symbol: str) -> dict:
                 'xgboost_confidence': analysis.get('xgboost_confidence'),
                 'analysis_type': analysis_type,
                 'ai_model': ai_model_label,
+                'as_of': as_of,
             }
         except Exception as e:
             st.warning(f"AI analysis unavailable: {e}")
@@ -1028,7 +1034,19 @@ with tab1:
         
         with col1:
             st.metric("Current Price", f"${result['current_price']:.2f}")
-        
+            # The free Alpha Vantage quote is the last completed session's
+            # close, not an intraday price. Date it so the number is not read
+            # as live and compared against a broker's ticker.
+            as_of = result.get('as_of')
+            if as_of:
+                try:
+                    pretty = datetime.strptime(as_of, "%Y-%m-%d").strftime("%b %d, %Y")
+                except (ValueError, TypeError):
+                    pretty = as_of
+                st.caption(f"Close of {pretty}")
+            else:
+                st.caption("Latest available close")
+
         with col2:
             st.metric("Recommended Buy Price", f"${result['buy_price']:.2f}")
         
