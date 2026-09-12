@@ -445,26 +445,52 @@ def analyze_individual_stock(symbol: str) -> dict:
                 'timestamp': datetime.now().isoformat()
             }
             
-            # Get AI analysis — try LangGraph workflow first, fall back to analyzer
-            try:
-                from agents.langgraph_workflow import run_analysis
-                portfolio_status = (
-                    f"Owned: {'Yes' if position['quantity'] > 0 else 'No'} | "
-                    f"Price: ${current_price:.2f} | Change: {change_percent:.2f}%"
-                )
-                analysis = run_analysis(symbol, portfolio_status=portfolio_status)
-                # With no LLM reachable, reasoning degrades to a model-only
-                # result. That is worth showing when XGBoost actually predicted
-                # something, but a bare HOLD with no model behind it carries no
-                # information -- fall through to the analyzer in that case.
-                model_only_without_signal = (
-                    analysis.get("analysis_type") == "model_only"
-                    and analysis.get("xgboost_signal") not in ("BUY", "SELL", "HOLD")
-                )
-                if not analysis.get("recommendation") or model_only_without_signal:
-                    raise ValueError("langgraph produced no usable result")
-            except Exception:
-                analysis = analyzer.analyze_stock(symbol, position)
+            # Only analyze when we actually have a quote. Reasoning about a
+            # stock whose price never arrived spends an LLM round trip (and, via
+            # the graph, more provider calls) to produce commentary about
+            # missing data that the error path below discards anyway.
+            analysis = {}
+            if current_price > 0:
+                # Try the LangGraph workflow first, fall back to the analyzer
+                try:
+                    from agents.langgraph_workflow import run_analysis, set_vector_db
+
+                    # Donate the analyzer's vector DB so the graph does not
+                    # build a second one at a different path with a cold cache,
+                    # which re-fetches the quote, overview and news we already
+                    # paid for.
+                    set_vector_db(analyzer.vector_db)
+
+                    portfolio_status = (
+                        f"Owned: {'Yes' if position['quantity'] > 0 else 'No'} | "
+                        f"Price: ${current_price:.2f} | Change: {change_percent:.2f}%"
+                    )
+                    # Hand over the quote we already fetched. Without this the
+                    # graph fetches its own, doubling the provider calls per
+                    # lookup and -- when that second call fails -- narrating
+                    # "Price: $0" while the metrics on screen show the real one.
+                    quote_summary = (
+                        f"Price: ${current_price:.2f} | "
+                        f"Change: {change_percent:.2f}%"
+                    )
+                    analysis = run_analysis(
+                        symbol,
+                        portfolio_status=portfolio_status,
+                        quote_data=quote_summary,
+                    )
+                    # With no LLM reachable, reasoning degrades to a model-only
+                    # result. That is worth showing when XGBoost actually
+                    # predicted something, but a bare HOLD with no model behind
+                    # it carries no information -- fall through in that case.
+                    model_only_without_signal = (
+                        analysis.get("analysis_type") == "model_only"
+                        and analysis.get("xgboost_signal")
+                        not in ("BUY", "SELL", "HOLD")
+                    )
+                    if not analysis.get("recommendation") or model_only_without_signal:
+                        raise ValueError("langgraph produced no usable result")
+                except Exception:
+                    analysis = analyzer.analyze_stock(symbol, position)
 
             # Check if we got real price data
             if current_price == 0:
