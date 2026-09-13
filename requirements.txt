@@ -21,7 +21,11 @@ xgboost-cpu>=2.1.1
 pandas>=2.3.0
 numpy>=2.3.0
 yfinance>=0.2.33
-streamlit>=1.40.0
+# use_container_width is deprecated, so the app uses width='stretch'. Buttons
+# gained `width` in 1.48, but there it only accepts an integer -- passing
+# 'stretch' raises TypeError. The string form works from 1.49 onward, which is
+# therefore the real floor (verified against 1.48/1.49/1.50/1.55/1.63).
+streamlit>=1.49.0
 python-dotenv==1.0.0
 scikit-learn>=1.7.0
 plotly>=5.18.0
