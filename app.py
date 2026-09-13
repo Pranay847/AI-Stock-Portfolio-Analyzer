@@ -2,6 +2,7 @@ import os
 import streamlit as st
 import pandas as pd
 import time
+import plotly.graph_objects as go
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from concurrent.futures import TimeoutError as FuturesTimeoutError
 from datetime import datetime
@@ -1391,20 +1392,82 @@ with tab4:
     
     st.divider()
     
-    # Recent Activity
-    st.subheader("📊 Recent Trading Activity")
-    recent_trades = pd.DataFrame({
-        'Time': ['10:30 AM', '11:45 AM', '2:15 PM', '3:30 PM'],
-        'Symbol': ['AAPL', 'GOOGL', 'TSLA', 'MSFT'],
-        'Action': ['BUY', 'SELL', 'BUY', 'HOLD'],
-        'Price': ['$195.50', '$142.30', '$242.80', '$378.90'],
-        'Status': ['Executed', 'Executed', 'Pending', 'Monitoring']
-    })
-    st.dataframe(recent_trades, width='stretch')
-    
-    # Performance Chart (placeholder)
-    st.subheader("📈 Portfolio Performance")
-    st.line_chart([100, 102, 105, 103, 108, 112, 110, 115], height=200)
+    # Position performance.
+    #
+    # This section previously showed a hardcoded four-row trade log ("Executed"
+    # BUY/SELL fills at invented prices) and a fabricated performance curve,
+    # both rendered unconditionally -- so a user who had never traded still saw
+    # what looked like their own account activity. Neither had a data source.
+    #
+    # There is still no trade history available: the SnapTrade connector reads
+    # positions only, and no order or transaction endpoint is wired up. So the
+    # trade log is gone rather than faked, and the chart below is built from
+    # real holdings.
+    st.subheader("📈 Position Performance")
+
+    positions = st.session_state.portfolio_data or []
+    if positions:
+        perf = pd.DataFrame([
+            {
+                "Symbol": p.get("symbol", "?"),
+                "pl_pct": float(p.get("profit_loss_percent", 0) or 0),
+                "pl_abs": float(p.get("profit_loss", 0) or 0),
+            }
+            for p in positions
+        ]).sort_values("pl_pct")
+
+        # Diverging blue/red around zero. Sign is carried by bar direction and
+        # by the signed label, so colour is never the only encoding. This pair
+        # is colourblind-safe (protan ΔE 19.2) where the conventional green/red
+        # is the classic failure case.
+        GAIN, LOSS = "#3987e5", "#e66767"
+
+        fig = go.Figure(
+            go.Bar(
+                x=perf["pl_pct"],
+                y=perf["Symbol"],
+                orientation="h",
+                marker_color=[GAIN if v >= 0 else LOSS for v in perf["pl_pct"]],
+                text=[f"{v:+.1f}%" for v in perf["pl_pct"]],
+                textposition="outside",
+                cliponaxis=False,
+                customdata=perf["pl_abs"],
+                hovertemplate="<b>%{y}</b>  %{x:+.2f}%  "
+                              "($%{customdata:,.2f})<extra></extra>",
+            )
+        )
+        fig.update_layout(
+            height=max(180, 34 * len(perf) + 70),
+            margin=dict(l=0, r=44, t=8, b=8),
+            paper_bgcolor="rgba(0,0,0,0)",
+            plot_bgcolor="rgba(0,0,0,0)",
+            xaxis=dict(title="Profit / loss (%)", zeroline=True,
+                       zerolinewidth=1, zerolinecolor="rgba(128,150,180,.45)",
+                       gridcolor="rgba(128,150,180,.15)"),
+            yaxis=dict(title=None),
+            bargap=0.35,
+            showlegend=False,
+        )
+        # No width argument: plotly_chart already fills the container on every
+        # supported version (use_container_width defaulted True through 1.50,
+        # width='stretch' from 1.55). Passing width= would TypeError on 1.49.
+        st.plotly_chart(fig, config={"displayModeBar": False})
+
+        winners = int((perf["pl_pct"] > 0).sum())
+        losers = int((perf["pl_pct"] < 0).sum())
+        st.caption(
+            f"{len(perf)} positions — {winners} up, {losers} down. "
+            "Unrealised profit/loss against average cost."
+        )
+    else:
+        st.info(
+            "No positions to chart yet. Connect an account or load the demo "
+            "portfolio to see per-position performance here."
+        )
+        st.caption(
+            "Trade history is not shown: the brokerage connection reads current "
+            "positions only, so there is no order log to display."
+        )
 
 # Footer
 st.divider()
