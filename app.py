@@ -323,7 +323,7 @@ def render_secure_connect(connector):
         st.caption("🔑 Personal SnapTrade key: connects this app owner's own account.")
 
     if not st.session_state.get("snaptrade_url"):
-        if st.button("🔗 Connect Robinhood", type="primary", use_container_width=True):
+        if st.button("🔗 Connect Robinhood", type="primary", width='stretch'):
             try:
                 # Personal keys identify the user themselves, so this skips
                 # registration and returns None ids.
@@ -339,11 +339,11 @@ def render_secure_connect(connector):
             st.link_button(
                 "🔓 Open secure login",
                 st.session_state.snaptrade_url,
-                use_container_width=True,
+                width='stretch',
             )
             st.caption("Opens SnapTrade's portal. Come back here when you're done.")
 
-        if st.button("✅ I've connected — load my stocks", use_container_width=True):
+        if st.button("✅ I've connected — load my stocks", width='stretch'):
             if load_snaptrade_portfolio(
                 connector,
                 st.session_state.get("snaptrade_user_id"),
@@ -351,7 +351,7 @@ def render_secure_connect(connector):
             ):
                 st.rerun()
 
-        if st.button("Cancel", use_container_width=True):
+        if st.button("Cancel", width='stretch'):
             for key in ("snaptrade_user_id", "snaptrade_user_secret", "snaptrade_url"):
                 st.session_state.pop(key, None)
             st.rerun()
@@ -856,11 +856,11 @@ with st.sidebar:
             if connector:
                 render_secure_connect(connector)
                 st.divider()
-                if st.button("🎭 Or try demo data", use_container_width=True):
+                if st.button("🎭 Or try demo data", width='stretch'):
                     if load_demo_portfolio():
                         st.rerun()
             else:
-                if st.button("🎭 Load Demo Portfolio", type="primary", use_container_width=True):
+                if st.button("🎭 Load Demo Portfolio", type="primary", width='stretch'):
                     if load_demo_portfolio():
                         st.rerun()
                 if status == "sdk_missing":
@@ -883,9 +883,9 @@ with st.sidebar:
                 
                 col1, col2 = st.columns(2)
                 with col1:
-                    submit = st.form_submit_button("🔓 Login", type="primary", use_container_width=True)
+                    submit = st.form_submit_button("🔓 Login", type="primary", width='stretch')
                 with col2:
-                    cancel = st.form_submit_button("Cancel", use_container_width=True)
+                    cancel = st.form_submit_button("Cancel", width='stretch')
                 
                 if submit:
                     if username and password:
@@ -909,7 +909,7 @@ with st.sidebar:
             st.caption("🔒 Your credentials are never stored")
             st.caption("📱 If 2FA is enabled, enter the code from your authenticator app")
         else:
-            if st.button("🔗 Connect to Robinhood", type="primary", use_container_width=True):
+            if st.button("🔗 Connect to Robinhood", type="primary", width='stretch'):
                 st.session_state.show_login_form = True
                 st.rerun()
     
@@ -983,7 +983,7 @@ with tab1:
     with col2:
         st.write("")  # Spacing
         st.write("")  # Spacing
-        analyze_button = st.button("🔎 Analyze Stock", type="primary", use_container_width=True)
+        analyze_button = st.button("🔎 Analyze Stock", type="primary", width='stretch')
     
     # AI availability check (no status banner shown)
 
@@ -1100,18 +1100,18 @@ with tab1:
         col1, col2, col3 = st.columns(3)
         
         with col1:
-            if st.button(f"✅ Execute BUY Order for {result['symbol']}", use_container_width=True):
+            if st.button(f"✅ Execute BUY Order for {result['symbol']}", width='stretch'):
                 if st.session_state.robinhood_connected:
                     st.success(f"Buy order placed for {result['symbol']} at ${result['buy_price']:.2f}")
                 else:
                     st.warning("Connect to Robinhood to execute trades")
         
         with col2:
-            if st.button(f"📋 Add to Watchlist", use_container_width=True):
+            if st.button(f"📋 Add to Watchlist", width='stretch'):
                 st.info(f"{result['symbol']} added to watchlist")
         
         with col3:
-            if st.button(f"📊 View Detailed Analysis", use_container_width=True):
+            if st.button(f"📊 View Detailed Analysis", width='stretch'):
                 st.info("Opening detailed analysis dashboard...")
 
 # TAB 2: Portfolio Analysis
@@ -1161,7 +1161,7 @@ with tab2:
                 st.caption("📊 Rule-Based Analysis")
         
         with col2:
-            if st.button("🤖 Analyze with AI", type="primary", use_container_width=True):
+            if st.button("🤖 Analyze with AI", type="primary", width='stretch'):
                 progress_bar = st.progress(0)
                 status_text = st.empty()
 
@@ -1246,7 +1246,7 @@ with tab2:
                 df_display.columns = ['Symbol', 'Name', 'Shares', 'Price', 'P/L %']
                 df_display['Price'] = df_display['Price'].apply(lambda x: f"${x:.2f}")
                 df_display['P/L %'] = df_display['P/L %'].apply(lambda x: f"{x:.2f}%")
-                st.dataframe(df_display, use_container_width=True)
+                st.dataframe(df_display, width='stretch')
 
 # TAB 3: S&P 500 Analysis
 with tab3:
@@ -1269,7 +1269,7 @@ with tab3:
 
     with col2:
         st.write("")  # Spacing
-        analyze_sp500_btn = st.button("🔄 Run Analysis", type="primary", use_container_width=True)
+        analyze_sp500_btn = st.button("🔄 Run Analysis", type="primary", width='stretch')
 
     if analyze_sp500_btn:
         progress_bar = st.progress(0)
@@ -1325,7 +1325,7 @@ with tab3:
                 return ['background-color: #fff3cd'] * len(row)
         
         styled_df = df.style.apply(highlight_recommendation, axis=1)
-        st.dataframe(styled_df, use_container_width=True, height=400)
+        st.dataframe(styled_df, width='stretch', height=400)
         
         # Quick Actions
         st.markdown("### ⚡ Quick Actions")
@@ -1400,7 +1400,7 @@ with tab4:
         'Price': ['$195.50', '$142.30', '$242.80', '$378.90'],
         'Status': ['Executed', 'Executed', 'Pending', 'Monitoring']
     })
-    st.dataframe(recent_trades, use_container_width=True)
+    st.dataframe(recent_trades, width='stretch')
     
     # Performance Chart (placeholder)
     st.subheader("📈 Portfolio Performance")
