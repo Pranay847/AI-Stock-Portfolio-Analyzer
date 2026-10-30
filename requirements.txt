@@ -43,3 +43,6 @@ robin-stocks>=3.0.0
 
 # Secure brokerage account connection (OAuth via SnapTrade)
 snaptrade-python-sdk>=13.0.0
+# HTTP API serving the React frontend (api/). Run: uvicorn api.main:app
+fastapi>=0.115.0
+uvicorn[standard]>=0.30.0
