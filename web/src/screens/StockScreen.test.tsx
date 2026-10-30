@@ -69,6 +69,31 @@ describe('StockScreen', () => {
     expect(screen.queryByText('HOLD')).toBeNull()
   })
 
+  it('keeps the previous result on screen, dimmed, while the next one runs', async () => {
+    let call = 0
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => {
+        call += 1
+        if (call === 1) return new Response(JSON.stringify(base), { status: 200 })
+        return new Promise<Response>(() => {}) // the second analysis never finishes
+      }),
+    )
+    const client = new QueryClient({ defaultOptions: { mutations: { retry: false } } })
+    render(
+      <QueryClientProvider client={client}>
+        <StockScreen />
+      </QueryClientProvider>,
+    )
+    await userEvent.click(screen.getByRole('button', { name: 'AAPL' }))
+    expect(await screen.findByText('$200.00')).toBeInTheDocument()
+
+    await userEvent.click(screen.getByRole('button', { name: 'MSFT' }))
+    // useMutation clears its own data here; the screen must not.
+    expect(screen.getByText('$200.00')).toBeInTheDocument()
+    expect(screen.getByText('$200.00').closest('[aria-busy]')).toHaveAttribute('aria-busy', 'true')
+  })
+
   it('does not submit an empty or whitespace query', async () => {
     renderWith({})
     const button = screen.getByRole('button', { name: 'Analyze' })

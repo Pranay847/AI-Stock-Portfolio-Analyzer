@@ -22,17 +22,31 @@ export function PortfolioScreen() {
   }
 
   if (portfolio.isPending) return <Spinner label="Loading your portfolio…" />
-  if (portfolio.isError) {
+  if (!portfolio.data) {
     return (
       <Callout tone="error" title="Could not load your portfolio">
-        {portfolio.error.message}
+        {portfolio.error?.message}
       </Callout>
     )
   }
 
+  // A failed background refresh keeps the last good data on screen rather
+  // than replacing it (which would also lose an in-progress connection).
   const state = portfolio.data
-  if (!state.source) return <ConnectPanel state={state} onLoaded={setPortfolio} />
-  return <PortfolioView state={state} onCleared={setPortfolio} />
+  return (
+    <div className="space-y-4">
+      {portfolio.isError && (
+        <Callout tone="warn" title="Could not refresh your portfolio">
+          {portfolio.error.message} Showing the last loaded data.
+        </Callout>
+      )}
+      {state.source ? (
+        <PortfolioView state={state} onCleared={setPortfolio} />
+      ) : (
+        <ConnectPanel state={state} onLoaded={setPortfolio} />
+      )}
+    </div>
+  )
 }
 
 // ------------------------------------------------------------- connecting
@@ -74,6 +88,7 @@ function SnapTradeConnect({ snaptrade, onLoaded }: { snaptrade: SnapTradeState; 
     mutationFn: api.connectSnapTrade,
     onSuccess: (res) => {
       setPortalUrl(res.portal_url)
+      sync.reset()
       void refreshPortfolio()
     },
   })
@@ -114,17 +129,35 @@ function SnapTradeConnect({ snaptrade, onLoaded }: { snaptrade: SnapTradeState; 
   if (snaptrade.owner_unlock_required) return <OwnerUnlock />
 
   const pending = portalUrl !== null || snaptrade.connection_pending
+  // Rendered in both states: an auto-sync on return from the portal can fail
+  // before any connection is pending, and a new login link can fail while one is.
+  const errors = (
+    <>
+      {connect.isError && (
+        <Callout tone="error" title="Could not start the connection">
+          {connect.error.message}
+        </Callout>
+      )}
+      {sync.isError && (
+        <Callout tone={sync.error.message.includes('No stock positions') ? 'warn' : 'error'} title="Could not load your holdings">
+          {sync.error.message}
+        </Callout>
+      )}
+      {cancel.isError && (
+        <Callout tone="error" title="Could not cancel the connection">
+          {cancel.error.message}
+        </Callout>
+      )}
+    </>
+  )
+
   if (!pending) {
     return (
       <div className="space-y-3">
         <Button loading={connect.isPending} onClick={() => connect.mutate()} icon={<Link2 className="size-4" aria-hidden />}>
           Connect Robinhood
         </Button>
-        {connect.isError && (
-          <Callout tone="error" title="Could not start the connection">
-            {connect.error.message}
-          </Callout>
-        )}
+        {errors}
       </div>
     )
   }
@@ -136,7 +169,7 @@ function SnapTradeConnect({ snaptrade, onLoaded }: { snaptrade: SnapTradeState; 
         <li>Come back here and load your holdings.</li>
       </ol>
       <div className="flex flex-wrap gap-2">
-        {portalUrl ? (
+        {portalUrl && (
           <a
             href={portalUrl}
             target="_blank"
@@ -146,11 +179,16 @@ function SnapTradeConnect({ snaptrade, onLoaded }: { snaptrade: SnapTradeState; 
             <ExternalLink className="size-4" aria-hidden />
             Open secure login
           </a>
-        ) : (
-          <Button variant="secondary" loading={connect.isPending} onClick={() => connect.mutate()} icon={<RefreshCw className="size-4" aria-hidden />}>
-            Get a new login link
-          </Button>
         )}
+        {/* Portal links are single-use, so a fresh one is always on offer. */}
+        <Button
+          variant={portalUrl ? 'ghost' : 'secondary'}
+          loading={connect.isPending}
+          onClick={() => connect.mutate()}
+          icon={<RefreshCw className="size-4" aria-hidden />}
+        >
+          {portalUrl ? 'New link' : 'Get a new login link'}
+        </Button>
         <Button variant="secondary" loading={sync.isPending} onClick={() => sync.mutate()}>
           I've connected — load my holdings
         </Button>
@@ -158,11 +196,7 @@ function SnapTradeConnect({ snaptrade, onLoaded }: { snaptrade: SnapTradeState; 
           Cancel
         </Button>
       </div>
-      {sync.isError && (
-        <Callout tone={sync.error.message.includes('No stock positions') ? 'warn' : 'error'} title="Could not load your holdings">
-          {sync.error.message}
-        </Callout>
-      )}
+      {errors}
     </div>
   )
 }
@@ -241,6 +275,12 @@ function PortfolioView({ state, onCleared }: { state: PortfolioState; onCleared:
         </Button>
       </div>
 
+      {disconnect.isError && (
+        <Callout tone="error" title="Could not disconnect">
+          {disconnect.error.message}
+        </Callout>
+      )}
+
       {summary && (
         <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
           <StatTile label="Cost basis" value={money(summary.total_cost_basis, { compact: true })} />
@@ -257,8 +297,8 @@ function PortfolioView({ state, onCleared }: { state: PortfolioState; onCleared:
           format={(v) => signedPercent(v)}
           items={[...positions]
             .sort((a, b) => b.profit_loss_percent - a.profit_loss_percent)
-            .map((p) => ({
-              key: p.symbol,
+            .map((p, i) => ({
+              key: `${i}-${p.symbol}`,
               label: p.symbol,
               value: p.profit_loss_percent,
               details: [
@@ -293,10 +333,10 @@ function HoldingsTable({ positions, totalEquity }: { positions: Position[]; tota
             </tr>
           </thead>
           <tbody>
-            {positions.map((p) => {
+            {positions.map((p, i) => {
               const weight = totalEquity ? (p.equity / totalEquity) * 100 : 0
               return (
-                <tr key={p.symbol} className="border-b border-border last:border-0">
+                <tr key={`${i}-${p.symbol}`} className="border-b border-border last:border-0">
                   <th scope="row" className="px-5 py-2.5 text-left font-normal">
                     <span className="font-semibold text-text">{p.symbol}</span>
                     {p.name && p.name !== p.symbol && <span className="block text-xs text-muted">{p.name}</span>}
@@ -413,8 +453,8 @@ function AnalysisPanel() {
             </Callout>
           )}
           <ul className="m-0 list-none divide-y divide-border p-0">
-            {job.results.map((r) => (
-              <li key={r.symbol} className="grid gap-2 py-3 sm:grid-cols-[6rem_8rem_1fr] sm:items-start">
+            {job.results.map((r, i) => (
+              <li key={`${i}-${r.symbol}`} className="grid gap-2 py-3 sm:grid-cols-[6rem_8rem_1fr] sm:items-start">
                 <span className="font-semibold text-text">{r.symbol}</span>
                 <div className="space-y-1.5">
                   <SignalBadge signal={r.recommendation} />

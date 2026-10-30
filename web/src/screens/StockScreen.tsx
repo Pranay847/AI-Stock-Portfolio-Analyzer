@@ -29,7 +29,13 @@ const PIPELINE = [
 
 export function StockScreen() {
   const [query, setQuery] = useState('')
-  const analysis = useMutation({ mutationFn: (q: string) => api.analyzeStock(q) })
+  // useMutation clears `data` as soon as a new mutation starts, so the last
+  // result is held here to stay on screen (dimmed) while the next one runs.
+  const [last, setLast] = useState<StockAnalysis | null>(null)
+  const analysis = useMutation({
+    mutationFn: (q: string) => api.analyzeStock(q),
+    onSuccess: setLast,
+  })
 
   function submit(q: string) {
     const trimmed = q.trim()
@@ -90,10 +96,12 @@ export function StockScreen() {
         </Callout>
       )}
 
-      {analysis.data && (
-        // While a new analysis runs, keep the previous one on screen, dimmed.
-        <div className={analysis.isPending ? 'opacity-50 transition-opacity' : 'transition-opacity'}>
-          <AnalysisResult result={analysis.data} />
+      {last && !analysis.isError && (
+        <div
+          aria-busy={analysis.isPending || undefined}
+          className={analysis.isPending ? 'opacity-50 transition-opacity' : 'transition-opacity'}
+        >
+          <AnalysisResult result={last} />
         </div>
       )}
 
