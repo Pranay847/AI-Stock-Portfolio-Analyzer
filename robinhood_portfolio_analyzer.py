@@ -607,7 +607,8 @@ Profit/Loss: ${position['profit_loss']:.2f} ({position['profit_loss_percent']:.2
         
         return results
     
-    def get_analysis_report(self, results: list[dict]) -> str:
+    @staticmethod
+    def get_analysis_report(results: list[dict]) -> str:
         """
         Generate a formatted analysis report.
         
@@ -665,6 +666,65 @@ Profit/Loss: ${position['profit_loss']:.2f} ({position['profit_loss_percent']:.2
 
 # ==================== DEMO / TESTING ====================
 
+def mock_portfolio() -> list[dict]:
+    """The demo holdings, freshly timestamped.
+
+    Loading the demo and analyzing it are separate steps: demo_with_mock_data()
+    also runs a full analyze_portfolio(), which an interactive caller may not
+    want to wait for.
+    """
+    return [
+            {
+                'symbol': 'AAPL',
+                'name': 'Apple Inc',
+                'quantity': 10,
+                'average_buy_price': 150.00,
+                'current_price': 175.00,
+                'equity': 1750.00,
+                'cost_basis': 1500.00,
+                'profit_loss': 250.00,
+                'profit_loss_percent': 16.67,
+                'timestamp': datetime.now().isoformat()
+            },
+            {
+                'symbol': 'GOOGL',
+                'name': 'Alphabet Inc',
+                'quantity': 5,
+                'average_buy_price': 140.00,
+                'current_price': 135.00,
+                'equity': 675.00,
+                'cost_basis': 700.00,
+                'profit_loss': -25.00,
+                'profit_loss_percent': -3.57,
+                'timestamp': datetime.now().isoformat()
+            },
+            {
+                'symbol': 'TSLA',
+                'name': 'Tesla Inc',
+                'quantity': 8,
+                'average_buy_price': 200.00,
+                'current_price': 250.00,
+                'equity': 2000.00,
+                'cost_basis': 1600.00,
+                'profit_loss': 400.00,
+                'profit_loss_percent': 25.00,
+                'timestamp': datetime.now().isoformat()
+            },
+            {
+                'symbol': 'NVDA',
+                'name': 'NVIDIA Corporation',
+                'quantity': 3,
+                'average_buy_price': 450.00,
+                'current_price': 480.00,
+                'equity': 1440.00,
+                'cost_basis': 1350.00,
+                'profit_loss': 90.00,
+                'profit_loss_percent': 6.67,
+                'timestamp': datetime.now().isoformat()
+            }
+        ]
+
+
 def demo_with_mock_data():
     """
     Demo the analyzer with mock portfolio data (no Robinhood login required).
@@ -677,56 +737,7 @@ def demo_with_mock_data():
     analyzer = RobinhoodPortfolioAnalyzer(vector_db_path="./demo_vector_db")
     
     # Mock portfolio data
-    analyzer.portfolio = [
-        {
-            'symbol': 'AAPL',
-            'name': 'Apple Inc',
-            'quantity': 10,
-            'average_buy_price': 150.00,
-            'current_price': 175.00,
-            'equity': 1750.00,
-            'cost_basis': 1500.00,
-            'profit_loss': 250.00,
-            'profit_loss_percent': 16.67,
-            'timestamp': datetime.now().isoformat()
-        },
-        {
-            'symbol': 'GOOGL',
-            'name': 'Alphabet Inc',
-            'quantity': 5,
-            'average_buy_price': 140.00,
-            'current_price': 135.00,
-            'equity': 675.00,
-            'cost_basis': 700.00,
-            'profit_loss': -25.00,
-            'profit_loss_percent': -3.57,
-            'timestamp': datetime.now().isoformat()
-        },
-        {
-            'symbol': 'TSLA',
-            'name': 'Tesla Inc',
-            'quantity': 8,
-            'average_buy_price': 200.00,
-            'current_price': 250.00,
-            'equity': 2000.00,
-            'cost_basis': 1600.00,
-            'profit_loss': 400.00,
-            'profit_loss_percent': 25.00,
-            'timestamp': datetime.now().isoformat()
-        },
-        {
-            'symbol': 'NVDA',
-            'name': 'NVIDIA Corporation',
-            'quantity': 3,
-            'average_buy_price': 450.00,
-            'current_price': 480.00,
-            'equity': 1440.00,
-            'cost_basis': 1350.00,
-            'profit_loss': 90.00,
-            'profit_loss_percent': 6.67,
-            'timestamp': datetime.now().isoformat()
-        }
-    ]
+    analyzer.portfolio = mock_portfolio()
     
     analyzer.is_logged_in = True  # Pretend we're logged in
     

@@ -49,81 +49,7 @@ for _key in ("ALPHA_VANTAGE_API_KEY", "ALPHAVANTAGE_API_KEY",
 # to connect a real Robinhood account directly.
 DEMO_MODE = str(get_config("DEMO_MODE", "true")).strip().lower() not in ("false", "0", "no")
 
-# Company name to ticker symbol mapping
-COMPANY_TO_TICKER = {
-    # Major Tech Companies
-    'APPLE': 'AAPL', 'MICROSOFT': 'MSFT', 'GOOGLE': 'GOOGL', 'ALPHABET': 'GOOGL',
-    'AMAZON': 'AMZN', 'META': 'META', 'FACEBOOK': 'META', 'TESLA': 'TSLA',
-    'NVIDIA': 'NVDA', 'NETFLIX': 'NFLX', 'ADOBE': 'ADBE', 'SALESFORCE': 'CRM',
-    'ORACLE': 'ORCL', 'INTEL': 'INTC', 'IBM': 'IBM', 'CISCO': 'CSCO',
-    'QUALCOMM': 'QCOM', 'AMD': 'AMD', 'PAYPAL': 'PYPL', 'SQUARE': 'SQ',
-    'BLOCK': 'SQ', 'TWITTER': 'TWTR', 'SNAP': 'SNAP', 'UBER': 'UBER',
-    'LYFT': 'LYFT', 'AIRBNB': 'ABNB', 'SPOTIFY': 'SPOT', 'ZOOM': 'ZM',
-    'SHOPIFY': 'SHOP', 'TWILIO': 'TWLO', 'DATADOG': 'DDOG',
-    
-    # Financial
-    'JPMORGAN': 'JPM', 'JP MORGAN': 'JPM', 'BANK OF AMERICA': 'BAC',
-    'WELLS FARGO': 'WFC', 'CITIGROUP': 'C', 'GOLDMAN SACHS': 'GS',
-    'MORGAN STANLEY': 'MS', 'AMERICAN EXPRESS': 'AXP', 'VISA': 'V',
-    'MASTERCARD': 'MA', 'BERKSHIRE HATHAWAY': 'BRK-B', 'BERKSHIRE': 'BRK-B',
-    
-    # Consumer
-    'WALMART': 'WMT', 'TARGET': 'TGT', 'COSTCO': 'COST', 'HOME DEPOT': 'HD',
-    'LOWES': 'LOW', 'MCDONALDS': 'MCD', 'STARBUCKS': 'SBUX', 'NIKE': 'NKE',
-    'COCA COLA': 'KO', 'PEPSI': 'PEP', 'PEPSICO': 'PEP', 'PROCTER GAMBLE': 'PG',
-    'JOHNSON JOHNSON': 'JNJ', 'PFIZER': 'PFE', 'MERCK': 'MRK',
-    
-    # Auto
-    'GENERAL MOTORS': 'GM', 'FORD': 'F', 'TOYOTA': 'TM', 'HONDA': 'HMC',
-    
-    # Energy
-    'EXXON': 'XOM', 'EXXON MOBIL': 'XOM', 'CHEVRON': 'CVX', 'BP': 'BP',
-    'SHELL': 'SHEL', 'CONOCOPHILLIPS': 'COP',
-    
-    # Airlines
-    'DELTA': 'DAL', 'AMERICAN AIRLINES': 'AAL', 'UNITED': 'UAL', 'SOUTHWEST': 'LUV',
-    
-    # Other
-    'DISNEY': 'DIS', 'COMCAST': 'CMCSA', 'VERIZON': 'VZ', 'ATT': 'T',
-    'AT&T': 'T', 'BOEING': 'BA', 'LOCKHEED MARTIN': 'LMT',
-    'CATERPILLAR': 'CAT', '3M': 'MMM', 'HONEYWELL': 'HON'
-}
-
-def resolve_ticker(input_str: str) -> tuple[str, bool]:
-    """
-    Resolve company name or ticker symbol to ticker symbol.
-    
-    Args:
-        input_str: Company name or ticker symbol
-        
-    Returns:
-        Tuple of (ticker_symbol, is_valid)
-    """
-    if not input_str:
-        return '', False
-    
-    cleaned = input_str.strip().upper()
-
-    # Check the company mapping before the ticker-shape heuristic. Short company
-    # names (APPLE, TESLA, VISA, FORD...) look like tickers, so testing shape
-    # first would pass them through unmapped and fail the quote lookup.
-    if cleaned in COMPANY_TO_TICKER:
-        return COMPANY_TO_TICKER[cleaned], True
-
-    # Already a valid ticker format (short, alphanumeric)
-    if len(cleaned) <= 5 and cleaned.replace('-', '').isalnum():
-        return cleaned, True
-
-    # Try partial matches (e.g., "MICROSOFT CORP" -> "MICROSOFT")
-    for company_name, ticker in COMPANY_TO_TICKER.items():
-        if company_name in cleaned or cleaned in company_name:
-            return ticker, True
-    
-    # Return as-is if it might be a ticker we don't have mapped
-    if len(cleaned) <= 5:
-        return cleaned, True
-    
-    return cleaned, False
+from services.tickers import COMPANY_TO_TICKER, resolve_ticker  # noqa: F401
 
 # Page configuration
 st.set_page_config(
@@ -230,9 +156,8 @@ if 'portfolio_summary' not in st.session_state:
 
 # ==================== ROBINHOOD INTEGRATION ====================
 
-@st.cache_resource(show_spinner=False)
-def get_analyzer():
-    """Get or create the portfolio analyzer instance."""
+def create_analyzer():
+    """Build a new analyzer, or None (with an on-screen error) if that fails."""
     try:
         from robinhood_portfolio_analyzer import RobinhoodPortfolioAnalyzer
         return RobinhoodPortfolioAnalyzer(vector_db_path="./portfolio_vector_db")
@@ -241,9 +166,22 @@ def get_analyzer():
         return None
 
 
+@st.cache_resource(show_spinner=False)
+def get_analyzer():
+    """The process-wide analyzer, for stateless work such as single-stock lookups.
+
+    st.cache_resource shares this one instance across every session, so never
+    assign .portfolio on it or call fetch_portfolio() through it -- that would
+    hand one user's holdings to another. Use create_analyzer() for anything
+    that holds a portfolio.
+    """
+    return create_analyzer()
+
+
 def connect_to_robinhood(username: str, password: str, mfa_code: str = None) -> bool:
     """Attempt to connect to Robinhood."""
-    analyzer = get_analyzer()
+    # Private instance: fetch_portfolio() below stores holdings on it.
+    analyzer = create_analyzer()
     if analyzer is None:
         return False
     
@@ -301,11 +239,13 @@ def load_snaptrade_portfolio(connector, user_id=None, user_secret=None) -> bool:
         st.session_state.portfolio_data = positions
         st.session_state.portfolio_summary = summarize_portfolio(positions)
 
-        # Wire up an analyzer over these holdings. analyze_portfolio() and
-        # get_analysis_report() read analyzer.portfolio, so without this
-        # "Analyze with AI" and "Export Full Report" are silent no-ops for
-        # accounts loaded through SnapTrade.
-        analyzer = get_analyzer()
+        # Wire up an analyzer over these holdings. analyze_portfolio() reads
+        # analyzer.portfolio, and "Analyze with AI" / "Export Full Report" are
+        # both gated on session_state.analyzer, so without this they are silent
+        # no-ops for accounts loaded through SnapTrade. It must be a private
+        # instance: the cached get_analyzer() is shared by every session, so
+        # storing holdings on it would leak them across users.
+        analyzer = create_analyzer()
         if analyzer is not None:
             analyzer.portfolio = positions
             st.session_state.analyzer = analyzer
@@ -313,15 +253,52 @@ def load_snaptrade_portfolio(connector, user_id=None, user_secret=None) -> bool:
         st.session_state.robinhood_connected = True
         return True
     except Exception as e:
-        st.error(f"Could not load holdings: {e}")
+        from services.redact import scrub
+        st.error(f"Could not load holdings: {scrub(str(e))}")
         return False
+
+
+def render_owner_gate(connector) -> bool:
+    """For a personal SnapTrade key, require the owner access token first.
+
+    A personal key resolves every call to its owner's account whatever the
+    caller sends, so without this any visitor could load the owner's real
+    holdings with two clicks. Returns True when this session may connect.
+    """
+    if not connector.is_personal:
+        return True  # commercial: each visitor registers their own SnapTrade user
+
+    from services.owner_access import token_problem, verify_owner_token
+
+    expected = get_config("OWNER_ACCESS_TOKEN")
+    problem = token_problem(expected)
+    if problem:
+        st.caption(
+            "🔑 This deployment uses a personal SnapTrade key, which can only show its "
+            f"owner's account, so connecting is disabled ({problem})."
+        )
+        return False
+
+    if st.session_state.get("owner_unlocked"):
+        return True
+
+    st.caption("🔑 Personal SnapTrade key: only the app owner can connect.")
+    with st.form("owner_unlock"):
+        supplied = st.text_input("Owner access token", type="password")
+        if st.form_submit_button("Unlock", width='stretch'):
+            if verify_owner_token(supplied, expected):
+                st.session_state.owner_unlocked = True
+                st.rerun()
+            else:
+                st.error("That access token is not valid.")
+    return False
 
 
 def render_secure_connect(connector):
     """Render the SnapTrade connection flow (no credentials touch this app)."""
     st.caption("🔒 You log in on Robinhood's own page — this app never sees your password.")
-    if str(getattr(connector, "auth_mode", "")).startswith("personal"):
-        st.caption("🔑 Personal SnapTrade key: connects this app owner's own account.")
+    if not render_owner_gate(connector):
+        return
 
     if not st.session_state.get("snaptrade_url"):
         if st.button("🔗 Connect Robinhood", type="primary", width='stretch'):
@@ -334,7 +311,8 @@ def render_secure_connect(connector):
                 st.session_state.snaptrade_url = url
                 st.rerun()
             except Exception as e:
-                st.error(f"Could not start secure connection: {e}")
+                from services.redact import scrub
+                st.error(f"Could not start secure connection: {scrub(str(e))}")
     else:
         if st.session_state.get("snaptrade_url"):
             st.link_button(
@@ -390,246 +368,19 @@ def disconnect_from_robinhood():
     # Clear the SnapTrade handshake too. The portal URL is single-use, so
     # leaving it behind would strand the sidebar on a dead link with the
     # Connect button hidden.
-    for _key in ("snaptrade_url", "snaptrade_user_id", "snaptrade_user_secret"):
+    for _key in ("snaptrade_url", "snaptrade_user_id", "snaptrade_user_secret",
+                 "owner_unlocked"):
         st.session_state.pop(_key, None)
 
 
 def analyze_individual_stock(symbol: str) -> dict:
-    """Analyze a single stock using AI."""
-    # Resolve company name or ticker to ticker symbol
-    original_input = symbol
-    symbol, is_valid = resolve_ticker(symbol)
-    
-    if not symbol:
-        return {
-            'symbol': 'INVALID',
-            'current_price': 0,
-            'buy_price': 0,
-            'sell_price': 0,
-            'recommendation': 'HOLD',
-            'confidence': 0,
-            'holding_period': 'N/A',
-            'summary': 'Please enter a stock symbol or company name',
-            'reasons': ['Example: "AAPL" or "Apple", "MSFT" or "Microsoft"'],
-            'analysis_type': 'error',
-            'ai_model': 'Error'
-        }
-    
-    # Show resolved ticker if company name was used
-    # (silently resolve without showing notification)
-    
-    analyzer = st.session_state.analyzer or get_analyzer()
-    
-    if analyzer:
-        try:
-            # Get stock quote only (1 API call instead of 2-3)
-            current_price = 0
-            change_percent = 0
-            as_of = ''
-            market_state = ''
-            quote_source = ''
+    """Analyze a single stock.
 
-            if analyzer.vector_db:
-                quote = analyzer.vector_db.fetch_quote(symbol)
-                if quote:
-                    current_price = quote.get('price', 0)
-                    change_percent = float(quote.get('change_percent', 0))
-                    # Alpha Vantage's free quote is the last *completed* session,
-                    # not an intraday price. Carry the date through so the UI can
-                    # say so rather than implying the number is live.
-                    as_of = quote.get('latest_trading_day', '')
-                    market_state = quote.get('market_state', '')
-                    quote_source = quote.get('source', '')
-            
-            # Create position for analysis
-            position = {
-                'symbol': symbol,
-                'name': symbol,
-                'quantity': 0,
-                'average_buy_price': current_price,
-                'current_price': current_price,
-                'equity': 0,
-                'cost_basis': 0,
-                'profit_loss': 0,
-                'profit_loss_percent': change_percent,
-                'timestamp': datetime.now().isoformat()
-            }
-            
-            # Only analyze when we actually have a quote. Reasoning about a
-            # stock whose price never arrived spends an LLM round trip (and, via
-            # the graph, more provider calls) to produce commentary about
-            # missing data that the error path below discards anyway.
-            analysis = {}
-            if current_price > 0:
-                # Try the LangGraph workflow first, fall back to the analyzer
-                try:
-                    from agents.langgraph_workflow import run_analysis, set_vector_db
-
-                    # Donate the analyzer's vector DB so the graph does not
-                    # build a second one at a different path with a cold cache,
-                    # which re-fetches the quote, overview and news we already
-                    # paid for.
-                    set_vector_db(analyzer.vector_db)
-
-                    portfolio_status = (
-                        f"Owned: {'Yes' if position['quantity'] > 0 else 'No'} | "
-                        f"Price: ${current_price:.2f} | Change: {change_percent:.2f}%"
-                    )
-                    # Hand over the quote we already fetched. Without this the
-                    # graph fetches its own, doubling the provider calls per
-                    # lookup and -- when that second call fails -- narrating
-                    # "Price: $0" while the metrics on screen show the real one.
-                    quote_summary = (
-                        f"Price: ${current_price:.2f} | "
-                        f"Change: {change_percent:.2f}%"
-                    )
-                    analysis = run_analysis(
-                        symbol,
-                        portfolio_status=portfolio_status,
-                        quote_data=quote_summary,
-                    )
-                    # With no LLM reachable, reasoning degrades to a model-only
-                    # result. That is worth showing when XGBoost actually
-                    # predicted something, but a bare HOLD with no model behind
-                    # it carries no information -- fall through in that case.
-                    model_only_without_signal = (
-                        analysis.get("analysis_type") == "model_only"
-                        and analysis.get("xgboost_signal")
-                        not in ("BUY", "SELL", "HOLD")
-                    )
-                    if not analysis.get("recommendation") or model_only_without_signal:
-                        raise ValueError("langgraph produced no usable result")
-                except Exception:
-                    analysis = analyzer.analyze_stock(symbol, position)
-
-            # Check if we got real price data
-            if current_price == 0:
-                if not is_valid:
-                    error_msg = f'Could not resolve "{original_input}" to a valid ticker symbol.'
-                    reasons = [
-                        f'Unknown company or ticker: {original_input}',
-                        'Try using the exact ticker symbol (e.g., MSFT, AAPL)',
-                        'Or check the spelling of the company name'
-                    ]
-                elif analyzer.vector_db is None:
-                    # The market-data client failed to initialise, which in
-                    # practice means ALPHA_VANTAGE_API_KEY is missing. Say so:
-                    # the old message blamed rate limits and sent people looking
-                    # for a broken API when nothing had been called at all.
-                    error_msg = 'Market data is not configured, so no quote could be requested.'
-                    reasons = [
-                        'ALPHA_VANTAGE_API_KEY is not set for this deployment',
-                        'On Streamlit Cloud: Settings -> Secrets, add '
-                        'ALPHA_VANTAGE_API_KEY = "your_key"',
-                        'Locally: add it to your .env file',
-                        'Get a free key at https://www.alphavantage.co/support/#api-key'
-                    ]
-                else:
-                    error_msg = f'Unable to fetch market data for {symbol}.'
-                    reasons = [
-                        'Real-time data unavailable',
-                        'Possible reasons: API rate limits, invalid ticker, or network issues',
-                        'Alpha Vantage free tier: 25 API calls/day limit'
-                    ]
-                
-                return {
-                    'symbol': symbol,
-                    'current_price': 0,
-                    'buy_price': 0,
-                    'sell_price': 0,
-                    'recommendation': 'HOLD',
-                    'confidence': 0,
-                    'holding_period': 'N/A',
-                    'summary': error_msg,
-                    'reasons': reasons,
-                    'analysis_type': 'error',
-                    'ai_model': 'Data Unavailable',
-                    'data_fetch_failed': True
-                }
-            
-            recommendation = analysis.get('recommendation', 'HOLD')
-            confidence = analysis.get('confidence', 50)
-            
-            # Dynamic price targets based on recommendation and confidence
-            if recommendation == 'BUY':
-                # Higher confidence = more aggressive upside target
-                sell_price = current_price * (1 + 0.08 + confidence * 0.0015)
-                # Entry price slightly below current, tighter with higher confidence
-                buy_price = current_price * (1 - 0.03 + confidence * 0.0002)
-            elif recommendation == 'SELL':
-                # Higher confidence = more aggressive downside protection
-                buy_price = current_price * (1 - 0.10 - confidence * 0.001)
-                # Exit target above current, closer with higher confidence
-                sell_price = current_price * (1 + 0.02 - confidence * 0.0001)
-            else:  # HOLD
-                # Moderate targets for range-bound trading
-                buy_price = current_price * (1 - 0.05)
-                sell_price = current_price * (1 + 0.08 + confidence * 0.0005)
-            
-            analysis_type = analysis.get('analysis_type', 'ai')
-            if analysis_type in ('langchain_llm', 'langchain_llm_text', 'langgraph_workflow'):
-                ai_model_label = 'LangChain + Mistral'
-            elif analysis_type == 'mistral_ai':
-                ai_model_label = 'Mistral AI'
-            else:
-                ai_model_label = 'Rule-Based'
-
-            return {
-                'symbol': symbol,
-                'current_price': current_price,
-                'buy_price': buy_price,
-                'sell_price': sell_price,
-                'recommendation': recommendation,
-                'confidence': confidence,
-                'holding_period': 'Short Term (1-3 months)' if recommendation == 'SELL' else 'Long Term (6+ months)',
-                'summary': analysis.get('summary', 'Analysis complete.'),
-                'reasons': analysis.get('reasons', []),
-                'risks': analysis.get('risks', []),
-                'xgboost_signal': analysis.get('xgboost_signal'),
-                'xgboost_confidence': analysis.get('xgboost_confidence'),
-                'analysis_type': analysis_type,
-                'ai_model': ai_model_label,
-                'as_of': as_of,
-                'market_state': market_state,
-                'quote_source': quote_source,
-            }
-        except Exception as e:
-            st.warning(f"AI analysis unavailable: {e}")
-    
-    # Fallback mock data
-    import random
-    price = random.uniform(50, 500)
-    rec = random.choice(['BUY', 'SELL', 'HOLD'])
-    confidence = random.randint(60, 95)
-    
-    # Dynamic price targets based on recommendation and confidence
-    if rec == 'BUY':
-        sell_price = price * (1 + 0.08 + confidence * 0.0015)
-        buy_price = price * (1 - 0.03 + confidence * 0.0002)
-    elif rec == 'SELL':
-        buy_price = price * (1 - 0.10 - confidence * 0.001)
-        sell_price = price * (1 + 0.02 - confidence * 0.0001)
-    else:  # HOLD
-        buy_price = price * (1 - 0.05)
-        sell_price = price * (1 + 0.08 + confidence * 0.0005)
-    
-    return {
-        'symbol': symbol,
-        'current_price': round(price, 2),
-        'buy_price': round(buy_price, 2),
-        'sell_price': round(sell_price, 2),
-        'recommendation': rec,
-        'confidence': confidence,
-        'holding_period': 'Short Term (1-3 months)' if rec == 'SELL' else 'Long Term (6+ months)',
-        'summary': f"Based on current market conditions and technical analysis, {symbol} shows {rec.lower()} signals.",
-        'reasons': [
-            "Technical indicators suggest momentum",
-            "Market sentiment is favorable",
-            "Valuation metrics are reasonable"
-        ],
-        'analysis_type': 'mock',
-        'ai_model': 'Demo Mode'
-    }
+    The logic lives in services.stock_analysis so the HTTP API runs the same
+    code; this wrapper only supplies the session's analyzer.
+    """
+    from services.stock_analysis import analyze_stock
+    return analyze_stock(symbol, st.session_state.analyzer or get_analyzer())
 
 
 def analyze_portfolio_stocks(progress_callback=None) -> pd.DataFrame:

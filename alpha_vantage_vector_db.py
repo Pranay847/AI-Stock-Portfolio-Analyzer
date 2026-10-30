@@ -4,12 +4,29 @@ import chromadb
 from chromadb.utils.embedding_functions import ONNXMiniLM_L6_V2
 from datetime import datetime, timedelta, timezone
 import json
+import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Optional
 from dotenv import load_dotenv
 
 load_dotenv()
+
+# One embedding session per process. Each ONNXMiniLM_L6_V2 builds its own
+# onnxruntime InferenceSession -- measured at ~105 MB apiece -- and every
+# analyzer constructs a vector DB, so a per-instance model multiplies memory by
+# the number of live analyzers (one per connected session, one per portfolio
+# job). InferenceSession.run is safe to call from concurrent threads.
+_EMBEDDING_MODEL = None
+_EMBEDDING_LOCK = threading.Lock()
+
+
+def shared_embedding_model():
+    global _EMBEDDING_MODEL
+    with _EMBEDDING_LOCK:
+        if _EMBEDDING_MODEL is None:
+            _EMBEDDING_MODEL = ONNXMiniLM_L6_V2()
+        return _EMBEDDING_MODEL
 
 
 def clean_symbol(symbol: str) -> str:
@@ -69,7 +86,7 @@ class AlphaVantageVectorDB:
         # ChromaDB's ONNX build of the same model runs on onnxruntime, which
         # avoids pulling in torch (~750 MB) for what is a CPU inference job.
         # Produces identical 384-dim vectors to the sentence-transformers build.
-        self.embedding_model = ONNXMiniLM_L6_V2()
+        self.embedding_model = shared_embedding_model()
 
         # In-memory TTL cache: {cache_key: (data, expires_at)}
         self._cache: dict = {}

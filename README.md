@@ -101,9 +101,12 @@ SnapTrade issues two kinds of key, selected with `SNAPTRADE_AUTH_MODE`:
 | `personal` (default) | Free, one per person | Only your own brokerage accounts |
 | `commercial` | Paid / approval-gated | Any visitor connects their own account |
 
-The default is `personal`, so a free SnapTrade key works out of the box against your own
-portfolio. A public deployment where strangers connect their own accounts requires a
-`commercial` key and `SNAPTRADE_AUTH_MODE=commercial`.
+The default is `personal`, so a free SnapTrade key works against your own portfolio. Because
+a personal key always resolves to its owner's account, connecting is **disabled until you set
+`OWNER_ACCESS_TOKEN`** (16+ characters), and each session must enter that token before it can
+connect -- otherwise any visitor to a public deployment could load your holdings. A deployment
+where strangers connect their own accounts needs a `commercial` key and
+`SNAPTRADE_AUTH_MODE=commercial`, which requires no owner token.
 
 LLM explanations resolve their backend automatically: OpenAI when `OPENAI_API_KEY` is set,
 otherwise local Ollama. If neither is reachable, the app still runs and shows the XGBoost
