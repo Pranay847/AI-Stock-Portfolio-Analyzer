@@ -21,6 +21,14 @@ _EMBEDDING_MODEL = None
 _EMBEDDING_LOCK = threading.Lock()
 
 
+# chromadb registers each PersistentClient's System in a shared class-level
+# dict before starting it, without a lock. Two clients created at once for the
+# same path therefore both fail: the second gets the unstarted System, and its
+# error path tears down the one the first is using. Serialise creation; once one
+# client has started the System, later ones take chromadb's "already exists" path.
+_CHROMA_CLIENT_LOCK = threading.Lock()
+
+
 def shared_embedding_model():
     global _EMBEDDING_MODEL
     with _EMBEDDING_LOCK:
@@ -63,24 +71,25 @@ class AlphaVantageVectorDB:
         
         self.base_url = "https://www.alphavantage.co/query"
         
-        # Initialize ChromaDB
-        self.client = chromadb.PersistentClient(path=db_path)
-        
-        # Create collections for different data types
-        self.quotes_collection = self.client.get_or_create_collection(
-            name="stock_quotes",
-            metadata={"description": "Real-time stock quotes from Alpha Vantage"}
-        )
-        
-        self.overview_collection = self.client.get_or_create_collection(
-            name="company_overviews",
-            metadata={"description": "Company fundamental data"}
-        )
-        
-        self.news_collection = self.client.get_or_create_collection(
-            name="stock_news",
-            metadata={"description": "Stock news and sentiment"}
-        )
+        # Initialize ChromaDB (serialised -- see _CHROMA_CLIENT_LOCK)
+        with _CHROMA_CLIENT_LOCK:
+            self.client = chromadb.PersistentClient(path=db_path)
+
+            # Create collections for different data types
+            self.quotes_collection = self.client.get_or_create_collection(
+                name="stock_quotes",
+                metadata={"description": "Real-time stock quotes from Alpha Vantage"}
+            )
+
+            self.overview_collection = self.client.get_or_create_collection(
+                name="company_overviews",
+                metadata={"description": "Company fundamental data"}
+            )
+
+            self.news_collection = self.client.get_or_create_collection(
+                name="stock_news",
+                metadata={"description": "Stock news and sentiment"}
+            )
         
         # Load embedding model (all-MiniLM-L6-v2 is fast and good quality).
         # ChromaDB's ONNX build of the same model runs on onnxruntime, which
