@@ -15,7 +15,7 @@ from fastapi import APIRouter, Depends, FastAPI, HTTPException, Request, Respons
 from fastapi.responses import FileResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 
-from api.jobs import AnalysisRunner
+from api.jobs import AnalysisRunner, RunnerBusy
 from api.schemas import (
     AnalysisJobState,
     AnalyzeStockRequest,
@@ -31,7 +31,7 @@ from api.schemas import (
     StockAnalysis,
 )
 from api.serialize import jsonable
-from api.sessions import COOKIE_NAME, Session, SessionStore
+from api.sessions import COOKIE_NAME, SECURE_COOKIE_NAME, Session, SessionStore
 from api.settings import REPO_ROOT, Settings, load_settings
 from services.owner_access import token_problem, verify_owner_token
 from services.redact import scrub
@@ -78,7 +78,8 @@ class AppState:
                  snaptrade_factory: Callable[[Settings], Any]):
         self.settings = settings
         self.sessions = SessionStore(settings.session_ttl_seconds, settings.max_sessions)
-        self.runner = AnalysisRunner(settings.max_concurrent_analyses, analyzer_factory)
+        self.runner = AnalysisRunner(settings.max_concurrent_analyses, analyzer_factory,
+                                     max_pending=settings.max_pending_analyses)
         self._analyzer_factory = analyzer_factory
         self._shared_analyzer = None
         self._analyzer_lock = threading.Lock()
@@ -103,15 +104,25 @@ def app_state(request: Request) -> AppState:
     return request.app.state.app_state
 
 
+def _cookie_name(request: Request) -> str:
+    # A cookie issued over plain http is never honoured over https: it would
+    # stay non-Secure for its whole life.
+    return SECURE_COOKIE_NAME if request.url.scheme == "https" else COOKIE_NAME
+
+
+def set_session_cookie(request: Request, response: Response, session_id: str) -> None:
+    # A browser-session cookie; the server expires idle sessions itself.
+    response.set_cookie(
+        _cookie_name(request), session_id, httponly=True, samesite="lax", path="/",
+        secure=request.url.scheme == "https",
+    )
+
+
 def current_session(request: Request, response: Response,
                     state: AppState = Depends(app_state)) -> Session:
-    session, created = state.sessions.get_or_create(request.cookies.get(COOKIE_NAME))
+    session, created = state.sessions.get_or_create(request.cookies.get(_cookie_name(request)))
     if created:
-        # A browser-session cookie; the server expires idle sessions itself.
-        response.set_cookie(
-            COOKIE_NAME, session.id, httponly=True, samesite="lax", path="/",
-            secure=request.url.scheme == "https",
-        )
+        set_session_cookie(request, response, session.id)
     return session
 
 
@@ -233,9 +244,12 @@ def portfolio_state(session: Session, state: AppState) -> PortfolioState:
 
 
 def analysis_state(session: Session) -> AnalysisJobState:
-    if session.analysis is None:
+    # Read once: a concurrent disconnect can set session.analysis to None
+    # between a check and a second read.
+    job = session.analysis
+    if job is None:
         return AnalysisJobState(status="idle")
-    snap = session.analysis.snapshot()
+    snap = job.snapshot()
     snap["results"] = [to_position_analysis(r) for r in snap["results"]]
     snap.pop("id", None)
     return AnalysisJobState(**snap)
@@ -306,7 +320,7 @@ def disconnect(session: Session = Depends(current_session),
 
 
 @router.post("/owner/unlock", status_code=204)
-def owner_unlock(body: OwnerUnlockRequest,
+def owner_unlock(body: OwnerUnlockRequest, request: Request, response: Response,
                  session: Session = Depends(current_session),
                  state: AppState = Depends(app_state)) -> None:
     """Prove this session is the owner, so it may use a personal SnapTrade key.
@@ -323,6 +337,9 @@ def owner_unlock(body: OwnerUnlockRequest,
         raise HTTPException(403, "That access token is not valid.")
     with session.lock:
         session.owner_unlocked = True
+    # New id at the privilege change, so a session id planted in the owner's
+    # browser beforehand does not inherit the unlock (session fixation).
+    set_session_cookie(request, response, state.sessions.rotate(session))
 
 
 def _require_snaptrade(state: AppState, session: Session):
@@ -375,7 +392,7 @@ def snaptrade_sync(session: Session = Depends(current_session),
         session.portfolio_source = "snaptrade"
         session.positions = positions
         session.snaptrade_portal_url = None  # single-use; the handshake is done
-        session.analysis = None
+        session.cancel_analysis()
         return portfolio_state(session, state)
 
 
@@ -387,7 +404,11 @@ def start_analysis(session: Session = Depends(current_session),
             raise HTTPException(409, "Load a portfolio before analyzing it.")
         if session.analysis is not None and session.analysis.active:
             raise HTTPException(409, "An analysis is already running.")
-        session.analysis = state.runner.start(session.positions)
+        try:
+            session.analysis = state.runner.start(session.positions)
+        except RunnerBusy:
+            raise HTTPException(503, "The analysis service is busy. Try again in a minute.",
+                                headers={"Retry-After": "30"}) from None
         return analysis_state(session)
 
 

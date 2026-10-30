@@ -8,6 +8,11 @@ analyze_portfolio's own progress_callback.
 Each job gets a *private* analyzer. analyze_portfolio reads self.portfolio and
 writes self.last_analysis_notes, so a shared instance would let concurrent jobs
 overwrite each other's holdings and results.
+
+Jobs are cancellable and the queue is bounded. A job whose session has moved
+on (disconnect, reload, re-sync) is cancelled rather than left running: it
+would otherwise hold a worker for minutes, keep sending the user's holdings to
+the LLM provider after they disconnected, and make everyone else wait.
 """
 
 import logging
@@ -22,6 +27,14 @@ from api.serialize import jsonable
 logger = logging.getLogger(__name__)
 
 
+class RunnerBusy(Exception):
+    """Too many analyses are queued or running; the caller should retry later."""
+
+
+class _Cancelled(Exception):
+    """Raised from the progress callback to stop a cancelled job early."""
+
+
 @dataclass
 class AnalysisJob:
     id: str
@@ -33,10 +46,20 @@ class AnalysisJob:
     notes: list[str] = field(default_factory=list)
     error: str | None = None
     _lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
+    _cancel: threading.Event = field(default_factory=threading.Event, repr=False)
 
     @property
     def active(self) -> bool:
         return self.status in ("queued", "running")
+
+    @property
+    def cancelled(self) -> bool:
+        return self._cancel.is_set()
+
+    def cancel(self) -> None:
+        """Stop the job as soon as it next checks: before it starts, or after
+        any position finishes. Positions not yet started are never analyzed."""
+        self._cancel.set()
 
     def snapshot(self) -> dict:
         with self._lock:
@@ -58,28 +81,55 @@ class AnalysisJob:
 
 
 class AnalysisRunner:
-    def __init__(self, max_concurrent: int, analyzer_factory: Callable[[], Any]):
-        self._executor = ThreadPoolExecutor(
-            max_workers=max(1, max_concurrent), thread_name_prefix="analysis"
-        )
+    def __init__(self, max_concurrent: int, analyzer_factory: Callable[[], Any],
+                 max_pending: int | None = None):
+        workers = max(1, max_concurrent)
+        self._executor = ThreadPoolExecutor(max_workers=workers, thread_name_prefix="analysis")
         self._analyzer_factory = analyzer_factory
+        # Queued + running. ThreadPoolExecutor bounds workers but not its queue,
+        # so without this any client could queue analyses without limit.
+        self._max_pending = max_pending or workers * 2
+        self._pending = 0
+        self._pending_lock = threading.Lock()
 
     def start(self, positions: list[dict]) -> AnalysisJob:
+        """Queue an analysis, or raise RunnerBusy if the queue is full."""
+        with self._pending_lock:
+            if self._pending >= self._max_pending:
+                raise RunnerBusy()
+            self._pending += 1
         job = AnalysisJob(id=secrets.token_urlsafe(9), total=len(positions))
-        # Copy the holdings: the session may be cleared while the job runs.
-        self._executor.submit(self._run, job, [dict(p) for p in positions])
+        try:
+            # Copy the holdings: the session may be cleared while the job runs.
+            self._executor.submit(self._run, job, [dict(p) for p in positions])
+        except Exception:
+            self._release()
+            raise
         return job
 
+    def _release(self) -> None:
+        with self._pending_lock:
+            self._pending -= 1
+
     def _run(self, job: AnalysisJob, positions: list[dict]) -> None:
-        job._update(status="running")
         try:
+            if job.cancelled:
+                return
+            job._update(status="running")
             analyzer = self._analyzer_factory()
             if analyzer is None:
                 job._update(status="error", error="The analysis engine failed to initialise.")
                 return
+            if job.cancelled:
+                return
             analyzer.portfolio = positions
 
             def progress(completed: int, total: int, symbol: str) -> None:
+                # Raising here makes analyze_portfolio cancel every position
+                # that has not started (its finally shuts its pool down with
+                # cancel_futures=True).
+                if job.cancelled:
+                    raise _Cancelled()
                 job._update(completed=completed, total=total, current_symbol=symbol)
 
             results = analyzer.analyze_portfolio(progress_callback=progress)
@@ -91,9 +141,13 @@ class AnalysisRunner:
                 completed=job.total,
                 current_symbol=None,
             )
+        except _Cancelled:
+            job._update(status="error", error="Cancelled")
         except Exception as e:
             logger.exception("portfolio analysis failed")
             job._update(status="error", error=f"{type(e).__name__}: {e}")
+        finally:
+            self._release()
 
     def shutdown(self) -> None:
         self._executor.shutdown(wait=False, cancel_futures=True)

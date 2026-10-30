@@ -29,6 +29,8 @@ class Settings:
     session_ttl_seconds: int
     max_sessions: int
     max_concurrent_analyses: int
+    # Queued + running analyses; beyond this, starting one returns 503.
+    max_pending_analyses: int
 
     @property
     def snaptrade_configured(self) -> bool:
@@ -53,4 +55,5 @@ def load_settings() -> Settings:
         session_ttl_seconds=_int("SESSION_TTL_SECONDS", 2 * 60 * 60),
         max_sessions=_int("MAX_SESSIONS", 1000),
         max_concurrent_analyses=_int("MAX_CONCURRENT_ANALYSES", 2),
+        max_pending_analyses=_int("MAX_PENDING_ANALYSES", 4),
     )

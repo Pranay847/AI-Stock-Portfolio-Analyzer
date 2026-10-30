@@ -41,6 +41,7 @@ class FakeAnalyzer:
         self.ai_backend = "Mistral API"
         self._gate = gate
         self._nan = nan
+        self.analyzed = 0  # positions reached, to observe early cancellation
 
     def analyze_stock(self, symbol, position, *a, **k):
         return {"symbol": symbol, "recommendation": "BUY", "confidence": 72,
@@ -52,6 +53,7 @@ class FakeAnalyzer:
             self._gate.wait(5)
         out = []
         for i, p in enumerate(self.portfolio, 1):
+            self.analyzed += 1
             out.append({"symbol": p["symbol"], "recommendation": "HOLD", "confidence": 60,
                         "summary": f"view on {p['symbol']}", "reasons": ["steady"],
                         "current_price": p["current_price"],
@@ -491,3 +493,138 @@ def test_owner_token_is_never_echoed(tmp_path):
     ]
     for r in responses:
         assert OWNER_TOKEN not in r.text
+
+
+# -------------------------------------------- fixes from the code review
+
+def test_owner_unlock_rotates_the_session_id(tmp_path):
+    client, _ = _personal(tmp_path)
+    before = client.get("/api/portfolio").cookies.get(COOKIE_NAME)
+    after = client.post("/api/owner/unlock", json={"token": OWNER_TOKEN}).cookies.get(COOKIE_NAME)
+    assert before and after and after != before
+    client.cookies.clear()
+    client.cookies.set(COOKIE_NAME, after)
+    assert client.get("/api/portfolio").json()["snaptrade"]["available"] is True
+
+
+def test_a_planted_session_id_does_not_inherit_the_owner_unlock(tmp_path):
+    """Session fixation: the attacker gets a real id, plants it in the owner's
+    browser, and waits for the owner to unlock on it."""
+    snap = FakeSnapTrade(personal=True)
+    settings = replace(load_settings(), static_dir=tmp_path / "x", owner_access_token=OWNER_TOKEN)
+    app = create_app(settings, analyzer_factory=lambda: FakeAnalyzer(), snaptrade_factory=lambda s: snap)
+    attacker, owner = TestClient(app), TestClient(app)
+
+    planted = attacker.get("/api/portfolio").cookies.get(COOKIE_NAME)
+    owner.cookies.set(COOKIE_NAME, planted)
+    unlocked = owner.post("/api/owner/unlock", json={"token": OWNER_TOKEN})
+    assert unlocked.status_code == 204
+    owner.cookies.clear()
+    owner.cookies.set(COOKIE_NAME, unlocked.cookies.get(COOKIE_NAME))
+    owner.post("/api/snaptrade/connect")
+    assert owner.post("/api/snaptrade/sync").status_code == 200
+
+    # The attacker still holds the planted id, which no longer exists.
+    assert attacker.post("/api/snaptrade/connect").status_code == 403
+    assert attacker.post("/api/snaptrade/sync").status_code == 403
+    assert attacker.get("/api/portfolio").json()["positions"] == []
+    assert sum(1 for c in snap.calls if c[0] == "fetch") == 1
+
+
+def test_https_uses_a_host_prefixed_secure_cookie(tmp_path):
+    settings = replace(load_settings(), static_dir=tmp_path / "x")
+    app = create_app(settings, analyzer_factory=lambda: FakeAnalyzer(), snaptrade_factory=lambda s: None)
+    cookie = TestClient(app, base_url="https://testserver").get("/api/portfolio").headers["set-cookie"]
+    low = cookie.lower()
+    assert cookie.startswith("__Host-sid=")
+    assert "secure" in low and "httponly" in low and "path=/" in low and "domain=" not in low
+
+
+def test_a_cookie_issued_over_http_is_not_honoured_over_https(tmp_path):
+    settings = replace(load_settings(), static_dir=tmp_path / "x")
+    app = create_app(settings, analyzer_factory=lambda: FakeAnalyzer(), snaptrade_factory=lambda s: None)
+    http = TestClient(app, base_url="http://testserver")
+    http.post("/api/portfolio/demo")
+    https = TestClient(app, base_url="https://testserver")
+    https.cookies.set(COOKIE_NAME, http.cookies.get(COOKIE_NAME))
+    r = https.get("/api/portfolio")
+    assert r.json()["positions"] == []  # a fresh session, not the non-Secure one
+    assert r.headers["set-cookie"].startswith("__Host-sid=")
+
+
+@pytest.mark.parametrize("action", ["disconnect", "reload_demo", "resync"])
+def test_replacing_the_portfolio_cancels_the_running_analysis(tmp_path, action):
+    gate = threading.Event()
+    built = []
+
+    def factory():
+        built.append(FakeAnalyzer(gate=gate))
+        return built[-1]
+
+    snap = FakeSnapTrade(personal=False)
+    client = make_client(tmp_path, analyzer_factory=factory, snaptrade=snap)
+    if action == "resync":
+        client.post("/api/snaptrade/connect")
+        client.post("/api/snaptrade/sync")
+    else:
+        client.post("/api/portfolio/demo")
+    client.post("/api/portfolio/analysis")
+    wait_for(client, lambda s: s["status"] == "running")
+
+    {
+        "disconnect": lambda: client.delete("/api/portfolio"),
+        "reload_demo": lambda: client.post("/api/portfolio/demo"),
+        "resync": lambda: client.post("/api/snaptrade/sync"),
+    }[action]()
+    gate.set()  # let the job reach its first progress check
+
+    deadline = time.monotonic() + 5
+    while time.monotonic() < deadline and built[0].analyzed == 0:
+        time.sleep(0.02)
+    time.sleep(0.2)
+    assert built[0].analyzed == 1, "the cancelled job kept analyzing positions"
+    assert client.get("/api/portfolio/analysis").json()["status"] == "idle"
+
+
+def test_the_analysis_queue_is_bounded(tmp_path):
+    gate = threading.Event()
+    settings = replace(load_settings(), static_dir=tmp_path / "x",
+                       max_concurrent_analyses=1, max_pending_analyses=2)
+    app = create_app(settings, analyzer_factory=lambda: FakeAnalyzer(gate=gate),
+                     snaptrade_factory=lambda s: None)
+    clients = [TestClient(app) for _ in range(3)]
+    for c in clients:
+        c.post("/api/portfolio/demo")
+
+    assert clients[0].post("/api/portfolio/analysis").status_code == 202
+    assert clients[1].post("/api/portfolio/analysis").status_code == 202
+    refused = clients[2].post("/api/portfolio/analysis")
+    assert refused.status_code == 503
+    assert refused.headers["retry-after"] == "30"
+
+    gate.set()
+    wait_for(clients[0], lambda s: s["status"] == "done")
+    wait_for(clients[1], lambda s: s["status"] == "done")
+    # Finished jobs free their slots.
+    assert clients[2].post("/api/portfolio/analysis").status_code == 202
+
+
+def test_cancelled_jobs_free_their_slot(tmp_path):
+    gate = threading.Event()
+    settings = replace(load_settings(), static_dir=tmp_path / "x",
+                       max_concurrent_analyses=1, max_pending_analyses=1)
+    app = create_app(settings, analyzer_factory=lambda: FakeAnalyzer(gate=gate),
+                     snaptrade_factory=lambda s: None)
+    client = TestClient(app)
+    client.post("/api/portfolio/demo")
+    assert client.post("/api/portfolio/analysis").status_code == 202
+    client.delete("/api/portfolio")  # cancels
+    gate.set()
+    client.post("/api/portfolio/demo")
+    deadline = time.monotonic() + 5
+    while time.monotonic() < deadline:
+        r = client.post("/api/portfolio/analysis")
+        if r.status_code == 202:
+            break
+        time.sleep(0.05)
+    assert r.status_code == 202

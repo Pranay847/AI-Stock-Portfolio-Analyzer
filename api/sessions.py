@@ -19,6 +19,10 @@ from dataclasses import dataclass, field
 from typing import Any
 
 COOKIE_NAME = "sid"
+# Used over https. Browsers accept a __Host- cookie only if it is Secure, has
+# Path=/ and no Domain, so no other origin -- a sibling subdomain included --
+# can plant or overwrite it. Plain-http dev keeps the unprefixed name.
+SECURE_COOKIE_NAME = "__Host-sid"
 _ID_BYTES = 32
 
 
@@ -44,11 +48,23 @@ class Session:
     lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
 
     def clear_portfolio(self) -> None:
+        self.cancel_analysis()
         self.portfolio_source = None
         self.positions = []
         self.snaptrade_user_id = None
         self.snaptrade_user_secret = None
         self.snaptrade_portal_url = None
+        self.analysis = None
+
+    def cancel_analysis(self) -> None:
+        """Cancel the current analysis, if any, and forget it.
+
+        Called whenever the holdings it was started on are replaced or cleared,
+        so an abandoned job neither holds a worker nor keeps sending the
+        holdings to the LLM provider.
+        """
+        if self.analysis is not None:
+            self.analysis.cancel()
         self.analysis = None
 
 
@@ -80,6 +96,20 @@ class SessionStore:
             while len(self._sessions) > self._max:
                 self._sessions.popitem(last=False)  # least recently used
             return session, True
+
+    def rotate(self, session: Session) -> str:
+        """Give `session` a fresh id, retiring the old one, and return it.
+
+        Called when a session gains privileges (the owner unlock). Otherwise an
+        attacker who planted a known session id in the owner's browser would
+        inherit the unlock on that same id (session fixation).
+        """
+        with self._lock:
+            self._sessions.pop(session.id, None)
+            session.id = secrets.token_urlsafe(_ID_BYTES)
+            session.touched = time.monotonic()
+            self._sessions[session.id] = session
+            return session.id
 
     def __len__(self) -> int:
         with self._lock:
