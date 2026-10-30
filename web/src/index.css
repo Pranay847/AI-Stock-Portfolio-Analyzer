@@ -1,0 +1,93 @@
+@import "tailwindcss";
+
+/* Semantic tokens. Components use these names (bg-surface, text-muted, ...)
+   rather than raw colours, so the palette changes in one place and light mode
+   is a variable swap rather than a second set of classes. */
+@theme inline {
+  --color-bg: var(--bg);
+  --color-surface: var(--surface);
+  --color-surface-2: var(--surface-2);
+  --color-border: var(--border);
+  --color-grid: var(--grid);
+  --color-axis: var(--axis);
+  --color-text: var(--text);
+  --color-muted: var(--muted);
+  --color-accent: var(--accent);
+  --color-accent-fg: var(--accent-fg);
+  --color-accent-text: var(--accent-text);
+  --color-gain: var(--gain);
+  --color-loss: var(--loss);
+  --color-gain-text: var(--gain-text);
+  --color-loss-text: var(--loss-text);
+  --color-warn: var(--warn);
+
+  --font-sans: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+/* Gain/loss is the dataviz diverging pair (blue <-> red), not green/red: green/red
+   measures deltaE 2.2 under deuteranopia -- the same colour to ~1 in 20 men --
+   while this pair measures 19.2 (dark) / 21.6 (light). Marks use --gain/--loss;
+   text uses --gain-text/--loss-text, stepped to clear 4.5:1 on the card surface
+   (the light-mode mark colours are only 4.42 / 3.95 as text). Meaning never rides
+   on colour alone: every delta also carries a sign and an arrow. */
+:root {
+  color-scheme: dark;
+  --bg: #0d1117;
+  --surface: #161b22;
+  --surface-2: #1c2330;
+  --border: #2a3342;
+  --grid: #222a36;
+  --axis: #3d4757;
+  --text: #e6edf3;
+  --muted: #8b98a9;
+  --accent: #256abf;
+  --accent-fg: #ffffff;
+  --accent-text: #6da7ec;
+  --gain: #3987e5;
+  --loss: #e66767;
+  --gain-text: #3987e5;
+  --loss-text: #e66767;
+  --warn: #d29922;
+}
+
+@media (prefers-color-scheme: light) {
+  :root {
+    color-scheme: light;
+    --bg: #f6f8fa;
+    --surface: #ffffff;
+    --surface-2: #f0f3f7;
+    --border: #d8dee6;
+    --grid: #eceff3;
+    --axis: #c3c2b7;
+    --text: #1f2328;
+    --muted: #59636e;
+    --accent: #256abf;
+    --accent-fg: #ffffff;
+    --accent-text: #1c5cab;
+    --gain: #2a78d6;
+    --loss: #e34948;
+    --gain-text: #1c5cab;
+    --loss-text: #d03b3b;
+    --warn: #9a6700;
+  }
+}
+
+html,
+body,
+#root {
+  min-height: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Tabular figures keep prices and percentages aligned in tables. */
+.tabular {
+  font-variant-numeric: tabular-nums;
+}
