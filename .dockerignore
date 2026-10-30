@@ -1,0 +1,25 @@
+# VCS, caches and local environments
+.git
+**/__pycache__
+**/*.pyc
+.venv
+venv
+**/.venv
+
+# Secrets -- configure the container with environment variables instead
+.env
+.streamlit/secrets.toml
+
+# Frontend build output and deps are rebuilt in the image
+web/node_modules
+web/dist
+
+# Local state: vector stores, logs, scratch databases
+*_vector_db
+my_stocks
+test_db
+logs
+
+# Not needed at runtime
+tests
+rag

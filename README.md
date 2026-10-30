@@ -2,7 +2,7 @@
 
 An AI-assisted portfolio analysis dashboard that combines market data, machine learning, retrieval-augmented generation, and natural-language explanations to help users understand stock positions and risk signals.
 
-The project generates buy / sell / hold style insights with an XGBoost model, indexes financial context in vector databases for semantic retrieval, and presents portfolio-level analysis through a Streamlit interface.
+The project generates buy / sell / hold style insights with an XGBoost model, indexes financial context in vector databases for semantic retrieval, and presents portfolio-level analysis through a React + TypeScript web app backed by a FastAPI service.
 
 ## Features
 
@@ -12,18 +12,22 @@ The project generates buy / sell / hold style insights with an XGBoost model, in
 - Uses vector databases for semantic retrieval over market and portfolio context.
 - Produces LLM-assisted explanations for model outputs and portfolio observations.
 - Supports portfolio-level analysis through Robinhood-oriented workflows.
-- Provides a Streamlit UI for interactive analysis and visualization.
+- Provides a React + TypeScript UI (with a legacy Streamlit UI kept during the migration).
+- Connects a real brokerage account through SnapTrade without the app ever seeing a password.
 - Includes tests and standalone scripts for data, RAG, and provider-specific workflows.
 
 ## Tech Stack
 
-- **App/UI:** Streamlit
+- **Frontend:** React 19, TypeScript, Vite, TanStack Query, Tailwind CSS
+- **API:** FastAPI, server-side sessions, background analysis jobs
+- **Legacy UI:** Streamlit
 - **Data:** yfinance, Alpha Vantage, Pandas, NumPy
 - **Machine learning:** XGBoost, scikit-learn
 - **RAG/vector search:** ChromaDB, vector stores, retrieval pipelines
 - **LLM workflows:** LangGraph-style agents, prompt orchestration, LLM reasoning modules
 - **Portfolio analysis:** Robinhood-oriented portfolio analyzer scripts
-- **Testing:** pytest
+- **Testing:** pytest, Vitest, Testing Library
+- **Deployment:** single Docker image (frontend + API)
 
 ## Architecture
 
@@ -41,42 +45,70 @@ feature engineering + vector indexing
 LLM reasoning layer
         |
         v
-Streamlit dashboard and analysis scripts
+FastAPI  <-->  React + TypeScript web app
 ```
 
 ## Project Layout
 
 ```text
 .
-├── app.py
-├── data/
-│   ├── fetch_stocks.py
-│   ├── features.py
-│   └── process_data.py
-├── models/
-│   ├── train_xgboost.py
-│   └── predict.py
-├── rag/
-│   ├── build_index.py
-│   └── retrieval.py
-├── agents/
-│   ├── langgraph_workflow.py
-│   ├── llm_reasoning.py
-│   └── prompts.py
+├── web/                         React + TypeScript frontend (Vite)
+│   └── src/{screens,components,api,lib}
+├── api/                         FastAPI app: JSON under /api, serves web/dist at /
+│   ├── main.py                  routes, session cookie, SPA serving
+│   ├── sessions.py              server-side sessions
+│   └── jobs.py                  background portfolio analysis
+├── services/                    framework-free logic shared by api/ and app.py
+│   ├── stock_analysis.py
+│   ├── tickers.py
+│   └── owner_access.py          gate for personal SnapTrade keys
+├── app.py                       legacy Streamlit UI (kept until the React app reaches parity)
+├── agents/                      LangGraph workflow, LLM reasoning, prompts
+├── models/                      XGBoost training and prediction
+├── data/                        price download and feature engineering
 ├── robinhood_portfolio_analyzer.py
-├── alpha_vantage_vector_db.py
-├── yahoo_finance_vector_db.py
+├── alpha_vantage_vector_db.py   quotes, news and RAG context (ChromaDB)
+├── snaptrade_connector.py       brokerage connection via SnapTrade
+├── Dockerfile                   one image: built frontend + API
 └── tests/
 ```
 
 ## Local Development
 
-```powershell
-python -m venv .venv
-.\.venv\Scripts\Activate.ps1
-pip install -r requirements.txt
-copy .env.example .env
+### React frontend + API (the new app)
+
+```bash
+python -m venv .venv && source .venv/bin/activate
+pip install -r requirements.txt -r requirements-dev.txt
+cp .env.example .env              # then fill in keys
+
+uvicorn api.main:app --reload     # API on :8000
+
+cd web && npm install && npm run dev   # UI on :5173, proxying /api to :8000
+```
+
+Or run the whole thing as it ships, in one container:
+
+```bash
+docker build -t ai-stock-analyzer .
+docker run -p 8000:8000 --env-file .env ai-stock-analyzer   # http://localhost:8000
+```
+
+The image serves the built frontend and the API from one origin, so it deploys to any
+container host (Render, Railway, Fly.io). The Python side cannot run as serverless
+functions: ChromaDB needs a persistent process and portfolio analysis runs for minutes.
+
+### Legacy Streamlit app
+
+```bash
 streamlit run app.py
+```
+
+### Tests
+
+```bash
+pytest                       # Python: services, API, contract
+cd web && npm test           # frontend
 ```
 
 Set any required API keys in `.env` before running provider-specific data or LLM workflows.
