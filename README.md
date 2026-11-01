@@ -27,7 +27,7 @@ The project generates buy / sell / hold style insights with an XGBoost model, in
 - **LLM workflows:** LangGraph-style agents, prompt orchestration, LLM reasoning modules
 - **Portfolio analysis:** Robinhood-oriented portfolio analyzer scripts
 - **Testing:** pytest, Vitest, Testing Library
-- **Deployment:** single Docker image (frontend + API)
+- **Deployment:** single Docker image (frontend + API), Render Blueprint
 
 ## Architecture
 
@@ -70,6 +70,7 @@ FastAPI  <-->  React + TypeScript web app
 ├── alpha_vantage_vector_db.py   quotes, news and RAG context (ChromaDB)
 ├── snaptrade_connector.py       brokerage connection via SnapTrade
 ├── Dockerfile                   one image: built frontend + API
+├── render.yaml                  Render Blueprint for that image
 └── tests/
 ```
 
@@ -97,6 +98,27 @@ docker run -p 8000:8000 --env-file .env ai-stock-analyzer   # http://localhost:8
 The image serves the built frontend and the API from one origin, so it deploys to any
 container host (Render, Railway, Fly.io). The Python side cannot run as serverless
 functions: ChromaDB needs a persistent process and portfolio analysis runs for minutes.
+
+### Deploy to Render
+
+[![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https://github.com/Pranay847/AI-Stock-Portfolio-Analyzer)
+
+`render.yaml` defines the service as a Render Blueprint: the Docker image above, a health
+check on `/api/health`, and a redeploy on every push to the default branch.
+
+1. Click the button and sign in to Render with GitHub.
+2. Render asks for `ALPHA_VANTAGE_API_KEY`, `MISTRAL_API_KEY`, `SNAPTRADE_CLIENT_ID` and
+   `SNAPTRADE_CONSUMER_KEY`. They are stored in Render's environment settings, never in the
+   repository.
+3. Deploy the Blueprint. The first build takes several minutes.
+4. Render generates `OWNER_ACCESS_TOKEN`. Copy it from the service's **Environment** tab and
+   enter it on the My Portfolio screen to connect your brokerage account.
+
+On the free plan the service sleeps after 15 idle minutes, and the next visit waits about a
+minute while it starts. Sessions are kept in memory, so a restart, redeploy or sleep signs
+everyone out and the owner token has to be entered again. The free plan's 0.1 CPU also makes
+analysis slow: the four-position demo analysis took 52 s in the image run under the same
+limits. The `starter` plan stays awake and has more CPU; change `plan:` in `render.yaml`.
 
 ### Legacy Streamlit app
 
@@ -140,8 +162,8 @@ connect -- otherwise any visitor to a public deployment could load your holdings
 where strangers connect their own accounts needs a `commercial` key and
 `SNAPTRADE_AUTH_MODE=commercial`, which requires no owner token.
 
-LLM explanations resolve their backend automatically: OpenAI when `OPENAI_API_KEY` is set,
-otherwise local Ollama. If neither is reachable, the app still runs and shows the XGBoost
+LLM explanations resolve their backend automatically: Mistral when `MISTRAL_API_KEY` is set,
+then OpenAI when `OPENAI_API_KEY` is set, otherwise local Ollama. If neither is reachable, the app still runs and shows the XGBoost
 signal without the narrative explanation.
 
 ## Performance

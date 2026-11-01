@@ -1,0 +1,36 @@
+# Render Blueprint: one Docker web service that serves the React app and the API
+# from the same origin. Deploy it with
+#   https://render.com/deploy?repo=https://github.com/Pranay847/AI-Stock-Portfolio-Analyzer
+# Field reference: https://render.com/docs/blueprint-spec
+services:
+  - type: web
+    name: ai-stock-analyzer
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    # Free: 512 MB RAM and 0.1 CPU, and the service sleeps after 15 idle minutes
+    # (the next request waits about a minute while it wakes). "starter" stays up.
+    plan: free
+    region: oregon
+    healthCheckPath: /api/health
+    autoDeployTrigger: commit
+    # Keep this to a single instance: sessions and analysis jobs live in memory,
+    # so a second instance would not see the first one's sessions.
+    envVars:
+      # A personal SnapTrade key always resolves to the key owner's own account,
+      # so the app refuses to use it until a session enters this token. Render
+      # generates a random value; read it under the service's Environment tab.
+      - key: OWNER_ACCESS_TOKEN
+        generateValue: true
+      - key: SNAPTRADE_AUTH_MODE
+        value: personal
+      # Secrets: Render asks for these when the Blueprint is first created, and
+      # they are never written to this file.
+      - key: ALPHA_VANTAGE_API_KEY
+        sync: false
+      - key: MISTRAL_API_KEY
+        sync: false
+      - key: SNAPTRADE_CLIENT_ID
+        sync: false
+      - key: SNAPTRADE_CONSUMER_KEY
+        sync: false
