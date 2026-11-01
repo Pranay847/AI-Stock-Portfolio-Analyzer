@@ -3,6 +3,7 @@ import requests
 import chromadb
 from chromadb.utils.embedding_functions import ONNXMiniLM_L6_V2
 from datetime import datetime, timedelta, timezone
+from functools import cached_property
 import json
 import threading
 import time
@@ -16,9 +17,43 @@ load_dotenv()
 # onnxruntime InferenceSession -- measured at ~105 MB apiece -- and every
 # analyzer constructs a vector DB, so a per-instance model multiplies memory by
 # the number of live analyzers (one per connected session, one per portfolio
-# job). InferenceSession.run is safe to call from concurrent threads.
+# job).
 _EMBEDDING_MODEL = None
 _EMBEDDING_LOCK = threading.Lock()
+
+# Model calls run one at a time, one document each. The model pads every input
+# to 256 tokens, so a call's working memory grows with its batch, and onnxruntime
+# keeps the largest allocation it has ever made for the life of the process.
+# Measured in the API image: batched calls from 6 threads (2 analyses x 3
+# positions) took the process to ~810 MB, past a 512 MB host such as Render's
+# free and starter plans; one document per call behind this lock stays at
+# ~250 MB. It costs no speed under a CPU quota: 10 news items took 9.4 s at
+# 0.1 CPU, against 10.3 s as one batched call.
+_EMBEDDING_CALL_LOCK = threading.Lock()
+
+
+class _SingleThreadMiniLM(ONNXMiniLM_L6_V2):
+    """ChromaDB's ONNX all-MiniLM-L6-v2 with a single, non-spinning worker thread.
+
+    The stock session starts one busy-waiting thread per host core. Under a CPU
+    quota those threads spend the quota waiting on each other: at 0.1 CPU, 10
+    news items took 20 s with the stock session and 9.4 s with this one, and at
+    1 CPU 1.09 s against 0.70 s. The vectors are the same.
+    """
+
+    @cached_property
+    def model(self):
+        options = self.ort.SessionOptions()
+        options.log_severity_level = 3
+        options.graph_optimization_level = self.ort.GraphOptimizationLevel.ORT_ENABLE_ALL
+        options.intra_op_num_threads = 1
+        options.inter_op_num_threads = 1
+        options.add_session_config_entry("session.intra_op.allow_spinning", "0")
+        return self.ort.InferenceSession(
+            os.path.join(self.DOWNLOAD_PATH, self.EXTRACTED_FOLDER_NAME, "model.onnx"),
+            providers=["CPUExecutionProvider"],
+            sess_options=options,
+        )
 
 
 # chromadb registers each PersistentClient's System in a shared class-level
@@ -33,7 +68,7 @@ def shared_embedding_model():
     global _EMBEDDING_MODEL
     with _EMBEDDING_LOCK:
         if _EMBEDDING_MODEL is None:
-            _EMBEDDING_MODEL = ONNXMiniLM_L6_V2()
+            _EMBEDDING_MODEL = _SingleThreadMiniLM()
         return _EMBEDDING_MODEL
 
 
@@ -500,8 +535,15 @@ Relevance: {news_item['relevance_score']:.2f}
         return self.create_embeddings_batch([text])[0]
 
     def create_embeddings_batch(self, texts: list[str]) -> list[list[float]]:
-        """Batch-encode multiple texts in one model forward pass (much faster than one-by-one)."""
-        return [list(map(float, v)) for v in self.embedding_model(texts)]
+        """Embed texts one document per model call (see _EMBEDDING_CALL_LOCK).
+
+        Callers still pass a whole batch so the results go to ChromaDB in one upsert.
+        """
+        vectors = []
+        for text in texts:
+            with _EMBEDDING_CALL_LOCK:
+                vectors.extend(self.embedding_model([text]))
+        return [list(map(float, v)) for v in vectors]
     
     def store_quote(self, quote_data: dict) -> bool:
         """
@@ -567,7 +609,7 @@ Relevance: {news_item['relevance_score']:.2f}
             chunks = self.create_overview_chunks(overview_data)
             chunk_types = ["basic", "valuation", "technical", "financial"]
 
-            # Batch-encode all chunks in a single model forward pass
+            # Embed every chunk, then write them in one upsert
             embeddings = self.create_embeddings_batch(chunks)
 
             ids = [f"{overview_data['symbol']}_overview_{ct}" for ct in chunk_types]
@@ -615,7 +657,7 @@ Relevance: {news_item['relevance_score']:.2f}
         try:
             chunks = [self.create_news_chunk(item) for item in news_items]
 
-            # Batch-encode all news chunks in one forward pass
+            # Embed every news chunk, then write them in one upsert
             embeddings = self.create_embeddings_batch(chunks)
 
             ids = [f"{item['symbol']}_news_{item['time_published']}_{i}" for i, item in enumerate(news_items)]

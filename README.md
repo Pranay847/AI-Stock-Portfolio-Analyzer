@@ -160,7 +160,7 @@ on a 10-stock portfolio using the included `benchmark_retrieval.py` script:
 Reproduce on your own hardware:
 
 ```bash
-pip install yfinance sentence-transformers chromadb
+pip install yfinance chromadb
 python benchmark_retrieval.py
 ```
 
@@ -168,6 +168,14 @@ Fetch timing depends on network conditions and Yahoo Finance rate limits, so the
 concurrent-fetch speedup varies between runs; embedding and vector-store figures are
 consistent. Numbers reflect a single machine and are meant as a reproducible baseline,
 not a fixed guarantee.
+
+The deployed app embeds differently from the benchmark's batched path: one document per
+call, on a single-threaded ONNX session. Measured in the Docker image under Render's
+free-plan limits (0.1 CPU, 512 MB), the single-threaded session embedded 10 news items in
+9.4 s against 20 s for ChromaDB's default session, and batching made little difference to it
+(10.3 s). Batching did cost memory: batched calls from concurrent analyses took the process
+past 512 MB and it was killed, while per-document calls kept the same workload at a 358 MB
+peak. Vector-store writes are still batched.
 
 ## Engineering Highlights
 
